@@ -87,7 +87,8 @@ async def run_single_backtest(
          })
     
     try:
-        strategy_instance = strategy_class(data=ohlc_df, params=strategy_params, portfolio=portfolio)
+        # OLD LINE was likely: strategy_instance = strategy_class(data=ohlc_df, params=strategy_params, portfolio=portfolio)
+        strategy_instance = strategy_class(shared_ohlc_data=ohlc_df, params=strategy_params, portfolio=portfolio) # <<<< CORRECTED HERE
     except Exception as e:
         logger.error(f"Error initializing strategy '{strategy_id_for_logging}': {e}", exc_info=True)
         return BacktestResult(

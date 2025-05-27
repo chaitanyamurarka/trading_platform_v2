@@ -115,13 +115,15 @@ async def _execute_optimization_task( # This remains an async function
     for i, params in enumerate(parameter_combinations):
         portfolio = PortfolioState(initial_capital=initial_capital)
         try:
-            strategy_instance = strategy_class(data=ohlc_df, params=params, portfolio=portfolio)
+            # OLD LINE: strategy_instance = strategy_class(data=ohlc_df, params=params, portfolio=portfolio)
+            strategy_instance = strategy_class(shared_ohlc_data=ohlc_df, params=params, portfolio=portfolio) # <<<< CORRECTED HERE
             strategy_instances_and_portfolios.append((strategy_instance, portfolio))
             if not ohlc_df.empty:
                 portfolio.record_equity(ohlc_df.index[0], ohlc_df.iloc[0]['close'])
         except Exception as e:
-            logger.error(f"Job {job_id}, Combo {i} ({params}): Error initializing strategy: {e}", exc_info=True)
-            continue
+            logger.error(f"Job {job_id}, Combo {i} ({params}): Error initializing strategy: {e}", exc_info=True) # Log actual params
+            # Mark this specific combination as failed or skip it
+            continue # Skip this faulty combination
     
     if not strategy_instances_and_portfolios:
         logger.error(f"Job {job_id}: No strategy instances could be initialized.")

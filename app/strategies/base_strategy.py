@@ -2,17 +2,13 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 from typing import Dict, Any, List, Optional
-from datetime import datetime
 
-from .. import models
-from ..config import logger
+from .. import models # For Trade, StrategyInfo, StrategyParameter models
+from ..config import logger 
 
 class PortfolioState:
-    # ... (PortfolioState class remains the same as the full version I provided in response to "please give strategy_engine.py and base_strategy.py from scratch")
-    # Ensure the P&L fix for short trades is in your version:
-    # In close_position for SHORT:
-    # pnl = (self.open_trade.entry_price - price) * qty_closed
-    # self.current_cash += pnl
+    # ... (PortfolioState class remains IDENTICAL to the last complete version I provided) ...
+    # This class is already managing state per-combination and is relatively lightweight.
     def __init__(self, initial_capital: float = 100000.0):
         self.initial_capital = initial_capital
         self.current_cash = initial_capital
@@ -120,128 +116,110 @@ class PortfolioState:
         self.open_trade = None
         self._reset_sl_tp()
 
+
 class BaseStrategy(ABC):
-    # ... (strategy_id, name, description as before) ...
-
-    def __init__(self, data: pd.DataFrame, params: Dict[str, Any], portfolio: PortfolioState):
-        self.data = data.copy() 
-        self.params = params # This should now include 'execution_price_type'
-        self.portfolio = portfolio
-        self._init_indicators()
-
-    # ... (_init_indicators, generate_signals_for_bar as before) ...
-
-    def process_bar(self, bar_index: int):
-        current_bar_with_indicators = self.data.iloc[bar_index]
-        timestamp = current_bar_with_indicators.name 
-        action_time = timestamp.to_pydatetime() if isinstance(timestamp, pd.Timestamp) else timestamp
-
-        # 1. Check Stop Loss / Take Profit (remains the same)
-        if self.portfolio.current_position_qty > 0:
-            # ... (SL/TP logic as before, using current_bar_with_indicators['low'] and ['high']) ...
-            exit_price_sl_tp = None
-            if self.portfolio.current_position_type == "LONG":
-                if self.portfolio.stop_loss_price and current_bar_with_indicators['low'] <= self.portfolio.stop_loss_price:
-                    exit_price_sl_tp = self.portfolio.stop_loss_price
-                    logger.info(f"{action_time}: STOP LOSS triggered for LONG at {exit_price_sl_tp:.2f} (Low: {current_bar_with_indicators['low']:.2f})")
-                elif self.portfolio.take_profit_price and current_bar_with_indicators['high'] >= self.portfolio.take_profit_price:
-                    exit_price_sl_tp = self.portfolio.take_profit_price
-                    logger.info(f"{action_time}: TAKE PROFIT triggered for LONG at {exit_price_sl_tp:.2f} (High: {current_bar_with_indicators['high']:.2f})")
-            elif self.portfolio.current_position_type == "SHORT":
-                if self.portfolio.stop_loss_price and current_bar_with_indicators['high'] >= self.portfolio.stop_loss_price:
-                    exit_price_sl_tp = self.portfolio.stop_loss_price
-                    logger.info(f"{action_time}: STOP LOSS triggered for SHORT at {exit_price_sl_tp:.2f} (High: {current_bar_with_indicators['high']:.2f})")
-                elif self.portfolio.take_profit_price and current_bar_with_indicators['low'] <= self.portfolio.take_profit_price:
-                    exit_price_sl_tp = self.portfolio.take_profit_price
-                    logger.info(f"{action_time}: TAKE PROFIT triggered for SHORT at {exit_price_sl_tp:.2f} (Low: {current_bar_with_indicators['low']:.2f})")
-            
-            if exit_price_sl_tp is not None:
-                self.portfolio.close_position(timestamp, exit_price_sl_tp)
-                return
-
-        # 2. Generate strategy signals
-        signal = self.generate_signals_for_bar(current_bar_with_indicators, bar_index)
-        
-        # *** KEY CHANGE: Determine action_price based on execution_price_type from params ***
-        execution_type = self.params.get("execution_price_type", "close") # Default to 'close' if not in params
-
-        if execution_type == "open":
-            action_price = current_bar_with_indicators['open']
-            logger.debug(f"Bar {bar_index} ({timestamp}): Using OPEN price ({action_price:.2f}) for execution based on signal '{signal}'.")
-        else: # Default to 'close'
-            action_price = current_bar_with_indicators['close']
-            logger.debug(f"Bar {bar_index} ({timestamp}): Using CLOSE price ({action_price:.2f}) for execution based on signal '{signal}'.")
-
-
-        if signal == "BUY":
-            self.portfolio.buy(timestamp, action_price, 
-                               stop_loss_pct=self.params.get("stop_loss_pct"), 
-                               take_profit_pct=self.params.get("take_profit_pct"))
-        elif signal == "SELL": 
-            self.portfolio.sell(timestamp, action_price,
-                                stop_loss_pct=self.params.get("stop_loss_pct"), 
-                                take_profit_pct=self.params.get("take_profit_pct"))
-        elif signal == "CLOSE_LONG" and self.portfolio.current_position_type == "LONG":
-            self.portfolio.close_position(timestamp, action_price)
-        elif signal == "CLOSE_SHORT" and self.portfolio.current_position_type == "SHORT":
-            self.portfolio.close_position(timestamp, action_price)
-
     strategy_id: str = "base_strategy"
     strategy_name: str = "Base Strategy"
     strategy_description: str = "This is a base class and should not be used directly."
 
-    def __init__(self, data: pd.DataFrame, params: Dict[str, Any], portfolio: PortfolioState):
-        self.data = data.copy() 
+    def __init__(self, shared_ohlc_data: pd.DataFrame, params: Dict[str, Any], portfolio: PortfolioState):
+        """
+        Args:
+            shared_ohlc_data (pd.DataFrame): A reference to the shared, read-only OHLCV data.
+                                            The strategy should NOT modify this DataFrame directly.
+            params (Dict[str, Any]): Parameters specific to this strategy instance.
+            portfolio (PortfolioState): The portfolio state object for this backtest run.
+        """
+        self.shared_ohlc_data = shared_ohlc_data # Store a REFERENCE, not a copy
         self.params = params
         self.portfolio = portfolio
-        self._init_indicators() # Calculate indicators and add them to self.data
+        
+        # _init_indicators might be used to pre-calculate constants or setup small state
+        # for incremental indicators, but NOT to create a full self.data copy with indicators.
+        self._init_indicators() 
 
     @abstractmethod
     def _init_indicators(self):
+        """
+        Initialize any small state needed for on-the-fly indicator calculation.
+        Avoid heavy computations or storing large data here.
+        Example: Store K for incremental EMA: self.k_fast = 2 / (self.params['fast_ema_period'] + 1)
+        """
         pass
 
     @abstractmethod
-    def generate_signals_for_bar(self, current_bar_with_indicators: pd.Series, bar_index: int) -> Optional[str]:
+    def get_indicator_values(self, bar_index: int) -> Dict[str, Any]:
         """
-        Generate "BUY", "SELL", "CLOSE_LONG", "CLOSE_SHORT", or None/HOLD.
-        `current_bar_with_indicators` is a row from self.data, so it includes indicator columns.
+        Calculates or retrieves necessary indicator values for the given bar_index
+        using self.shared_ohlc_data and self.params.
+        This is where "on-the-fly" calculation for the current bar happens.
+        Returns a dictionary of indicator names to their values for the current context.
+        E.g., {"fast_ema": 75.5, "slow_ema": 72.3, "prev_fast_ema": 75.0, ...}
         """
         pass
 
-    def process_bar(self, bar_index: int): # Changed: removed current_bar from arguments
-        """Processes a single bar: checks SL/TP, then strategy signals."""
-        # CRITICAL FIX: Get the current bar *from self.data* which contains indicators
-        current_bar_with_indicators = self.data.iloc[bar_index]
-        timestamp = current_bar_with_indicators.name 
+    @abstractmethod
+    def generate_signals(self, bar_index: int, current_ohlc_bar: pd.Series, indicators: Dict[str, Any]) -> Optional[str]:
+        """
+        Generate "BUY", "SELL", "CLOSE_LONG", "CLOSE_SHORT", or None/HOLD
+        based on current_ohlc_bar and the calculated indicators.
+        """
+        pass
+
+    def process_bar(self, bar_index: int):
+        """Processes a single bar: calculates indicators, checks SL/TP, then strategy signals."""
+        if bar_index >= len(self.shared_ohlc_data):
+            logger.warning(f"bar_index {bar_index} is out of bounds for shared_ohlc_data with length {len(self.shared_ohlc_data)}")
+            return
+
+        current_ohlc_bar = self.shared_ohlc_data.iloc[bar_index]
+        timestamp = current_ohlc_bar.name 
         action_time = timestamp.to_pydatetime() if isinstance(timestamp, pd.Timestamp) else timestamp
 
-        # 1. Check Stop Loss / Take Profit for existing positions
+        # 1. Calculate/Retrieve indicators for the current context (current and previous bars as needed)
+        # This now happens before SL/TP checks if SL/TP depend on dynamic indicators.
+        # For simplicity, if SL/TP are fixed % from entry, this order is fine.
+        # If SL/TP are dynamic (e.g., ATR based), indicators might be needed first.
+        # For now, let's assume SL/TP prices are already set in portfolio state.
+        
+        # Check Stop Loss / Take Profit for existing positions
         if self.portfolio.current_position_qty > 0:
             exit_price_sl_tp = None
+            # ... (SL/TP logic identical to previous version, using current_ohlc_bar['low'] and ['high']) ...
             if self.portfolio.current_position_type == "LONG":
-                if self.portfolio.stop_loss_price and current_bar_with_indicators['low'] <= self.portfolio.stop_loss_price:
+                if self.portfolio.stop_loss_price and current_ohlc_bar['low'] <= self.portfolio.stop_loss_price:
                     exit_price_sl_tp = self.portfolio.stop_loss_price
-                    logger.info(f"{action_time}: STOP LOSS triggered for LONG at {exit_price_sl_tp:.2f} (Low: {current_bar_with_indicators['low']:.2f})")
-                elif self.portfolio.take_profit_price and current_bar_with_indicators['high'] >= self.portfolio.take_profit_price:
+                    logger.info(f"{action_time}: STOP LOSS triggered for LONG at {exit_price_sl_tp:.2f} (Low: {current_ohlc_bar['low']:.2f})")
+                elif self.portfolio.take_profit_price and current_ohlc_bar['high'] >= self.portfolio.take_profit_price:
                     exit_price_sl_tp = self.portfolio.take_profit_price
-                    logger.info(f"{action_time}: TAKE PROFIT triggered for LONG at {exit_price_sl_tp:.2f} (High: {current_bar_with_indicators['high']:.2f})")
+                    logger.info(f"{action_time}: TAKE PROFIT triggered for LONG at {exit_price_sl_tp:.2f} (High: {current_ohlc_bar['high']:.2f})")
             elif self.portfolio.current_position_type == "SHORT":
-                if self.portfolio.stop_loss_price and current_bar_with_indicators['high'] >= self.portfolio.stop_loss_price:
+                if self.portfolio.stop_loss_price and current_ohlc_bar['high'] >= self.portfolio.stop_loss_price:
                     exit_price_sl_tp = self.portfolio.stop_loss_price
-                    logger.info(f"{action_time}: STOP LOSS triggered for SHORT at {exit_price_sl_tp:.2f} (High: {current_bar_with_indicators['high']:.2f})")
-                elif self.portfolio.take_profit_price and current_bar_with_indicators['low'] <= self.portfolio.take_profit_price:
+                    logger.info(f"{action_time}: STOP LOSS triggered for SHORT at {exit_price_sl_tp:.2f} (High: {current_ohlc_bar['high']:.2f})")
+                elif self.portfolio.take_profit_price and current_ohlc_bar['low'] <= self.portfolio.take_profit_price:
                     exit_price_sl_tp = self.portfolio.take_profit_price
-                    logger.info(f"{action_time}: TAKE PROFIT triggered for SHORT at {exit_price_sl_tp:.2f} (Low: {current_bar_with_indicators['low']:.2f})")
+                    logger.info(f"{action_time}: TAKE PROFIT triggered for SHORT at {exit_price_sl_tp:.2f} (Low: {current_ohlc_bar['low']:.2f})")
             
             if exit_price_sl_tp is not None:
                 self.portfolio.close_position(timestamp, exit_price_sl_tp)
                 return 
 
-        # 2. Generate strategy signals if no SL/TP was hit
-        # Pass the bar that includes indicators
-        signal = self.generate_signals_for_bar(current_bar_with_indicators, bar_index)
+        # 2. Get current indicator values (on-the-fly)
+        indicators = self.get_indicator_values(bar_index)
+        if not indicators: # If indicators can't be calculated (e.g., not enough data yet for lookbacks)
+            logger.debug(f"Bar {bar_index} ({action_time}): Indicators not available yet.")
+            return
+
+        # 3. Generate strategy signals based on OHLC and indicators
+        signal = self.generate_signals(bar_index, current_ohlc_bar, indicators)
         
-        action_price = current_bar_with_indicators['close'] 
+        execution_type = self.params.get("execution_price_type", "close")
+        action_price = current_ohlc_bar['open'] if execution_type == "open" else current_ohlc_bar['close']
+        
+        log_price_type = "OPEN" if execution_type == "open" else "CLOSE"
+        if signal: # Only log if there's a non-None signal
+            logger.debug(f"Bar {bar_index} ({action_time}): Using {log_price_type} price ({action_price:.2f}) for execution based on signal '{signal}'.")
 
         if signal == "BUY":
             self.portfolio.buy(timestamp, action_price, 
@@ -258,6 +236,7 @@ class BaseStrategy(ABC):
 
     @classmethod
     def get_info(cls) -> models.StrategyInfo:
+        # ... (remains the same)
         return models.StrategyInfo(
             id=cls.strategy_id, name=cls.strategy_name,
             description=cls.strategy_description, parameters=[]
