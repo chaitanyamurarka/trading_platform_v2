@@ -131,8 +131,8 @@ class OptimizationRequest(BaseModel):
     timeframe: str
     strategy_id: str
     parameter_ranges: List[OptimizationParameterRange]
-    # Example: [{"name": "fast_ma", "start": 5, "end": 50, "step": 5}, ...]
-    # metric_to_optimize: str = Field(default="net_pnl") # Future: optimize for Sharpe, win rate etc.
+    execution_price_type: Literal['open', 'close'] = Field(default='close', description="Global execution price type for this optimization run.")
+    initial_capital: float = Field(default=100000.0, description="Initial capital for each backtest in optimization.")
 
 class OptimizationJobStatus(BaseModel):
     job_id: str

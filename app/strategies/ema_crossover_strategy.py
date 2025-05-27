@@ -1,6 +1,6 @@
 # app/strategies/ema_crossover_strategy.py
 import pandas as pd
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 from .base_strategy import BaseStrategy, PortfolioState 
 from .. import models 
@@ -9,133 +9,128 @@ from ..config import logger
 class EMACrossoverStrategy(BaseStrategy):
     strategy_id: str = "ema_crossover"
     strategy_name: str = "EMA Crossover Strategy"
-    strategy_description: str = "Generates buy/sell signals based on crossover of two EMAs."
+    strategy_description: str = "Generates signals based on two EMA crossovers using incremental calculation."
 
     def __init__(self, shared_ohlc_data: pd.DataFrame, params: Dict[str, Any], portfolio: PortfolioState):
+        # The super().__init__ call will invoke self._initialize_strategy_state()
         super().__init__(shared_ohlc_data, params, portfolio)
-        # _init_indicators is called by super()
 
-    def _init_indicators(self):
-        """
-        Validate periods. No heavy calculation or data copying here.
-        We could pre-calculate K values for EMA if using incremental EMA.
-        For on-the-fly slice-based calculation, this might just validate params.
-        """
+
+    def _initialize_strategy_state(self):
+        """Initialize EMA periods, multipliers (K), and last known EMA values."""
         self.fast_period = self.params.get('fast_ema_period', 10)
         self.slow_period = self.params.get('slow_ema_period', 20)
 
-        if not isinstance(self.fast_period, int) or not isinstance(self.slow_period, int) or \
-           self.fast_period <= 0 or self.slow_period <= 0:
+        if not (isinstance(self.fast_period, int) and isinstance(self.slow_period, int) and \
+                self.fast_period > 0 and self.slow_period > 0):
             raise ValueError("EMA periods must be positive integers.")
-        logger.info(f"'{self.strategy_id}' initialized. Params: Fast={self.fast_period}, Slow={self.slow_period}.")
-
-
-    def get_indicator_values(self, bar_index: int) -> Optional[Dict[str, Any]]:
-        """
-        Calculates EMAs for current bar_index and required previous bars on-the-fly.
-        Needs to look back enough to get prev2 values.
-        """
-        # Determine the required lookback window for calculations
-        # Longest period + number of shifts (2 for prev2)
-        required_lookback = max(self.fast_period, self.slow_period) + 2 
-
-        if bar_index < required_lookback -1 : # Need enough data points to calculate the longest EMA and shift it twice
-            # Example: slow_period=20, need 20 points for EMA, +2 for shift(2) -> index 21 is first valid point for prev2_slow_ema
-            # So if bar_index is less than (20+2-1) = 21, it's not enough.
-            return None 
-
-        # Define the slice of data needed: from start of data up to current bar_index
-        # Pandas slicing iloc[:end] includes end-1. So, iloc[:bar_index + 1] includes current bar.
-        start_slice_idx = 0 # Could optimize by slicing a smaller window, but full history up to bar_index is safest for EWM
-        current_data_slice = self.shared_ohlc_data['close'].iloc[start_slice_idx : bar_index + 1]
+        if self.fast_period >= self.slow_period:
+             logger.warning(f"Strategy '{self.strategy_id}': Fast EMA period ({self.fast_period}) "
+                            f"is not less than Slow EMA period ({self.slow_period}).")
         
-        if len(current_data_slice) < required_lookback: # Double check after slicing
+        # EMA multipliers
+        self.k_fast = 2 / (self.fast_period + 1)
+        self.k_slow = 2 / (self.slow_period + 1)
+
+        # State for incremental EMAs (current, previous, day-before-previous)
+        self.current_fast_ema: Optional[float] = None
+        self.prev_fast_ema: Optional[float] = None
+        self.prev2_fast_ema: Optional[float] = None
+        
+        self.current_slow_ema: Optional[float] = None
+        self.prev_slow_ema: Optional[float] = None
+        self.prev2_slow_ema: Optional[float] = None
+        
+        logger.info(f"'{self.strategy_id}' instance initialized for incremental EMAs. "
+                    f"Params: Fast={self.fast_period}, Slow={self.slow_period}.")
+
+    def _calculate_incremental_ema(self, current_price: float, prev_ema_val: Optional[float], k_multiplier: float) -> float:
+        """ Helper to calculate EMA incrementally. """
+        if prev_ema_val is None or pd.isna(prev_ema_val): # First calculation, use current price as seed
+            return current_price
+        return (current_price * k_multiplier) + (prev_ema_val * (1 - k_multiplier))
+
+    def update_indicators_and_generate_signals(self, bar_index: int, current_ohlc_bar: pd.Series) -> Optional[str]:
+        current_close_price = current_ohlc_bar['close']
+
+        # 1. Update EMA history (shift values back)
+        self.prev2_fast_ema = self.prev_fast_ema
+        self.prev_fast_ema = self.current_fast_ema
+        
+        self.prev2_slow_ema = self.prev_slow_ema
+        self.prev_slow_ema = self.current_slow_ema
+
+        # 2. Calculate current EMAs incrementally based on the *newly shifted* previous_ema
+        self.current_fast_ema = self._calculate_incremental_ema(current_close_price, self.prev_fast_ema, self.k_fast)
+        self.current_slow_ema = self._calculate_incremental_ema(current_close_price, self.prev_slow_ema, self.k_slow)
+
+        # --- Signal Generation Logic (uses the now updated prev & prev2 values) ---
+        # Minimum data needed for prev2_ema to be valid (after two shifts from initial seeding)
+        if bar_index < 2: # Not enough history for prev2 values to be meaningful
+            # Log for first few bars if needed
+            if bar_index < max(self.fast_period, self.slow_period) + 5: 
+                 logger.debug(f"Bar {bar_index} ({current_ohlc_bar.name}) for '{self.strategy_id}': Warming up EMAs (bar_index < 2). "
+                              f"P2F:{self.prev2_fast_ema}, P2S:{self.prev2_slow_ema}, "
+                              f"P1F:{self.prev_fast_ema}, P1S:{self.prev_slow_ema}, "
+                              f"CurF:{self.current_fast_ema}, CurS:{self.current_slow_ema}")
             return None
 
-        # Calculate EMAs on this slice
-        fast_ema_series = current_data_slice.ewm(span=self.fast_period, adjust=False).mean()
-        slow_ema_series = current_data_slice.ewm(span=self.slow_period, adjust=False).mean()
-
-        # Get the required values (current, prev, prev2)
-        # These are relative to the end of the fast_ema_series/slow_ema_series
-        # which corresponds to bar_index in the original shared_ohlc_data
-        
-        # Check if we have enough calculated EMA values (at least 3 for current, prev, prev2)
-        if len(fast_ema_series) < 3 or len(slow_ema_series) < 3:
-            return None # Not enough data points yet for prev2_ema even after slicing
-
-        indicators = {
-            "fast_ema": fast_ema_series.iloc[-1], # Current bar's fast_ema
-            "slow_ema": slow_ema_series.iloc[-1], # Current bar's slow_ema
-            "prev_fast_ema": fast_ema_series.iloc[-2],
-            "prev_slow_ema": slow_ema_series.iloc[-2],
-            "prev2_fast_ema": fast_ema_series.iloc[-3],
-            "prev2_slow_ema": slow_ema_series.iloc[-3]
-        }
-        return indicators
-
-    def generate_signals(self, bar_index: int, current_ohlc_bar: pd.Series, indicators: Dict[str, Any]) -> Optional[str]:
-        log_this_bar = bar_index < 50 # Or some other condition for focused logging
-
-        prev_fast = indicators.get('prev_fast_ema')
-        prev_slow = indicators.get('prev_slow_ema')
-        prev2_fast = indicators.get('prev2_fast_ema')
-        prev2_slow = indicators.get('prev2_slow_ema')
-
-        def sf(val): return f"{val:.2f}" if pd.notna(val) else "NaN"
-
-        # The None check for indicators is now implicitly handled by get_indicator_values returning None
-        # If get_indicator_values returned None, generate_signals wouldn't be called with valid indicators.
-        # However, individual values from the dict could still be None if calculation failed for some reason.
-        if any(pd.isna(v) for v in [prev_fast, prev_slow, prev2_fast, prev2_slow]):
-            if log_this_bar:
-                 logger.debug(f"Bar {bar_index} ({current_ohlc_bar.name}): Indicator values contain NaN after get_indicator_values. "
-                              f"P2F:{sf(prev2_fast)}, P2S:{sf(prev2_slow)}, P1F:{sf(prev_fast)}, P1S:{sf(prev_slow)}")
+        # Ensure all necessary previous EMAs are now populated (no longer NaN/None after seeding and a few iterations)
+        if self.prev2_fast_ema is None or self.prev2_slow_ema is None or \
+           self.prev_fast_ema is None or self.prev_slow_ema is None:
+            if bar_index < max(self.fast_period, self.slow_period) + 5:
+                 logger.debug(f"Bar {bar_index} ({current_ohlc_bar.name}) for '{self.strategy_id}': Still warming up (some prev EMAs are None). "
+                              f"P2F:{self.prev2_fast_ema}, P2S:{self.prev2_slow_ema}, "
+                              f"P1F:{self.prev_fast_ema}, P1S:{self.prev_slow_ema}, "
+                              f"CurF:{self.current_fast_ema}, CurS:{self.current_slow_ema}")
             return None
 
+
+        def sf(val): return f"{val:.2f}" if pd.notna(val) and val is not None else "None"
+        log_this_bar = bar_index < 50 # Or another condition
 
         if log_this_bar:
-            logger.debug(f"Bar {bar_index} ({current_ohlc_bar.name}): Close={current_ohlc_bar['close']:.2f}, "
-                         f"P2F:{sf(prev2_fast)}, P2S:{sf(prev2_slow)}, P1F:{sf(prev_fast)}, P1S:{sf(prev_slow)}, "
+            logger.debug(f"Bar {bar_index} ({current_ohlc_bar.name}) for '{self.strategy_id}': C={current_close_price:.2f}, "
+                         f"P2F:{sf(self.prev2_fast_ema)}, P2S:{sf(self.prev2_slow_ema)}, "
+                         f"P1F:{sf(self.prev_fast_ema)}, P1S:{sf(self.prev_slow_ema)}, "
+                         f"CurF:{sf(self.current_fast_ema)}, CurS:{sf(self.current_slow_ema)}, "
                          f"Pos: {self.portfolio.current_position_type}")
-
+        
         signal = None
-        bullish_crossover_condition = prev2_fast <= prev2_slow and prev_fast > prev_slow
-        bearish_crossover_condition = prev2_fast >= prev2_slow and prev_fast < prev_slow
+        # Crossover condition: checks if prev_fast crossed prev_slow, using prev2 as reference
+        bullish_crossover_condition = self.prev2_fast_ema <= self.prev2_slow_ema and self.prev_fast_ema > self.prev_slow_ema
+        bearish_crossover_condition = self.prev2_fast_ema >= self.prev2_slow_ema and self.prev_fast_ema < self.prev_slow_ema
 
         if bullish_crossover_condition:
-            logger.info(f"Bar {bar_index} ({current_ohlc_bar.name}): BULLISH CROSSOVER DETECTED. "
-                        f"P2F:{sf(prev2_fast)}, P2S:{sf(prev2_slow)}, P1F:{sf(prev_fast)}, P1S:{sf(prev_slow)}")
+            logger.info(f"Bar {bar_index} ({current_ohlc_bar.name}) for '{self.strategy_id}': BULLISH CROSSOVER. "
+                        f"P2F:{sf(self.prev2_fast_ema)}, P2S:{sf(self.prev2_slow_ema)}, P1F:{sf(self.prev_fast_ema)}, P1S:{sf(self.prev_slow_ema)}")
             if self.portfolio.current_position_type == "SHORT":
                 signal = "CLOSE_SHORT"
             elif self.portfolio.current_position_type != "LONG":
                 signal = "BUY"
         
         elif bearish_crossover_condition:
-            logger.info(f"Bar {bar_index} ({current_ohlc_bar.name}): BEARISH CROSSOVER DETECTED. "
-                        f"P2F:{sf(prev2_fast)}, P2S:{sf(prev2_slow)}, P1F:{sf(prev_fast)}, P1S:{sf(prev_slow)}")
+            logger.info(f"Bar {bar_index} ({current_ohlc_bar.name}) for '{self.strategy_id}': BEARISH CROSSOVER. "
+                        f"P2F:{sf(self.prev2_fast_ema)}, P2S:{sf(self.prev2_slow_ema)}, P1F:{sf(self.prev_fast_ema)}, P1S:{sf(self.prev_slow_ema)}")
             if self.portfolio.current_position_type == "LONG":
                 signal = "CLOSE_LONG"
             elif self.portfolio.current_position_type != "SHORT":
                 signal = "SELL"
         
-        # Logging the final generated signal
         if signal:
-             logger.info(f"Bar {bar_index} ({current_ohlc_bar.name}): Signal: {signal} "
-                         f"(P2F:{sf(prev2_fast)}, P2S:{sf(prev2_slow)}, P1F:{sf(prev_fast)}, P1S:{sf(prev_slow)}, Pos:{self.portfolio.current_position_type})")
-        elif log_this_bar: # Log if it's an early bar and no signal
-             logger.debug(f"Bar {bar_index} ({current_ohlc_bar.name}): No crossover, no signal. Pos: {self.portfolio.current_position_type}")
+             logger.info(f"Bar {bar_index} ({current_ohlc_bar.name}) for '{self.strategy_id}': Signal: {signal}")
+        elif log_this_bar:
+             logger.debug(f"Bar {bar_index} ({current_ohlc_bar.name}) for '{self.strategy_id}': No crossover. Pos: {self.portfolio.current_position_type}")
              
         return signal
 
     @classmethod
     def get_info(cls) -> models.StrategyInfo:
-        # ... (get_info remains the same, defining parameters)
         parameters = [
-            models.StrategyParameter(name="fast_ema_period", type="int", default=10, min_value=1, max_value=100, step=1), 
-            models.StrategyParameter(name="slow_ema_period", type="int", default=20, min_value=2, max_value=200, step=1), 
-            models.StrategyParameter(name="stop_loss_pct", type="float", default=2.0, value=2.0, min_value=0.1, max_value=10.0, step=0.1), # Added value=default for StrategyParameter model if it's mandatory
-            models.StrategyParameter(name="take_profit_pct", type="float", default=4.0, value=4.0, min_value=0.1, max_value=20.0, step=0.1) # Added value=default
+            models.StrategyParameter(name="fast_ema_period", type="int", default=10, value=10, min_value=1, max_value=200, step=1), 
+            models.StrategyParameter(name="slow_ema_period", type="int", default=20, value=20, min_value=2, max_value=500, step=1), 
+            models.StrategyParameter(name="stop_loss_pct", type="float", default=2.0, value=2.0, min_value=0.1, max_value=10.0, step=0.1),
+            models.StrategyParameter(name="take_profit_pct", type="float", default=4.0, value=4.0, min_value=0.1, max_value=20.0, step=0.1)
         ]
         return models.StrategyInfo(
             id=cls.strategy_id, name=cls.strategy_name,
