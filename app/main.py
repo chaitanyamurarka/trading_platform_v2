@@ -1,6 +1,8 @@
 # app/main.py
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse # Added JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+
 from typing import List, Dict, Type, Optional 
 import io
 import csv
@@ -19,6 +21,16 @@ from .strategies.ema_crossover_strategy import EMACrossoverStrategy
 # Potentially more strategy imports if you have them
 
 app = FastAPI(title="Trading System V2", version="0.1.0")
+
+# —— Add this block ——
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],            # or list your exact front-end URLs, e.g. ["http://localhost:5500"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# ————————————————————
 
 # Strategy Registry
 STRATEGY_REGISTRY: Dict[str, Type[BaseStrategy]] = {
