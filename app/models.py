@@ -1,5 +1,5 @@
 # app/models.py
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Union # Added Union
 from pydantic import BaseModel, Field, validator, field_validator
 from datetime import datetime, date
 
@@ -20,7 +20,6 @@ class TokenInfo(BaseModel):
     symbol: str = Field(..., description="The underlying symbol (e.g., NIFTY, RELIANCE).")
     trading_symbol: Optional[str] = Field(None, description="Full trading symbol or ticker (e.g., NIFTY23OCTFUT, RELIANCE-EQ).")
     instrument: Optional[str] = Field(None, description="Type of instrument (e.g., EQ, FUTIDX, OPTIDX, FUTSTK, OPTSTK).")
-    # Add other relevant fields from scripmaster like 'expiry', 'option_type', 'strike_price' if needed directly here.
 
 class AvailableSymbolsResponse(BaseModel):
     """Response model for listing available symbols for an exchange."""
@@ -41,27 +40,14 @@ class HistoricalDataRequest(BaseModel):
     @field_validator('interval')
     @classmethod
     def interval_must_be_valid(cls, v: str) -> str:
-        """
-        Validates the interval.
-        These intervals should align with what the data module supports for direct fetching or resampling.
-        For direct Shoonya API: '1', '3', '5', '10', '15', '30', '60' (minutes), '240' (day - check Shoonya docs for exact daily code, often 'D' or a number)
-        For resampling via pandas: '1T', '5T', '15T', '60T' or '1H', '1D' etc.
-        The application logic will need to map these user inputs to API/resampling codes.
-        """
-        # This list can be expanded based on supported resampling rules and API direct intervals
-        # It's a good idea to keep this flexible or map it internally.
-        valid_user_intervals = ['1', '3', '5', '10', '15', '30', '60', 'D', '1H', '1T', '5T', '15T'] # Example
+        valid_user_intervals = ['1', '3', '5', '10', '15', '30', '60', 'D', '1H', '1T', '5T', '15T', '1min', '5min', '1D'] # Added user-friendly versions
         if v not in valid_user_intervals:
-            # Consider if this list should come from a config or be more dynamic.
             raise ValueError(f"Interval must be one of {valid_user_intervals}. Received: {v}")
         return v
 
     @field_validator('end_time')
     @classmethod
     def end_time_must_be_after_start_time(cls, v: date, values: Any) -> date:
-        """Validates that end_time is not before start_time."""
-        # Pydantic v2 way to get other field values if `field_validator` is used
-        # For older Pydantic, you might need `root_validator` or pass `values.data`
         data = values.data
         if 'start_time' in data and v < data['start_time']:
             raise ValueError("end_time must not be before start_time.")
@@ -69,7 +55,7 @@ class HistoricalDataRequest(BaseModel):
 
 class OHLCDataPoint(BaseModel):
     """Represents a single OHLCV data point for a specific time."""
-    time: datetime = Field(description="Timestamp for the candle (typically start time of the interval).")
+    time: Union[datetime, int] = Field(description="Timestamp for the candle (can be datetime object or UNIX timestamp in seconds).") # Modified to Union
     open: float
     high: float
     low: float
@@ -78,15 +64,7 @@ class OHLCDataPoint(BaseModel):
     oi: Optional[int] = Field(None, description="Open Interest for the interval, if applicable.")
 
     class Config:
-        # For Pydantic V2, use `model_config`
-        # For Pydantic V1, use `orm_mode = True` if creating from ORM objects
-        # However, here we are creating from dicts or other models, so it might not be needed.
-        # Example for V2:
-        # model_config = {
-        #     "from_attributes": True  #  Replaces orm_mode
-        # }
         pass
-
 
 class HistoricalDataResponse(BaseModel):
     """Response model for historical data requests."""
@@ -109,7 +87,11 @@ class StrategyParameter(BaseModel):
     step: Optional[float] = Field(None, description="Step for numeric ranges (e.g., for optimizers).")
     choices: Optional[List[Any]] = Field(None, description="List of allowed values (for 'choice' type).")
     description: Optional[str] = Field(None, description="Explanation of the parameter.")
-
+    # Proposed additions for UI/UX enhancements
+    min_opt_range: Optional[float] = Field(None, description="Default minimum value for optimization range if applicable.")
+    max_opt_range: Optional[float] = Field(None, description="Default maximum value for optimization range if applicable.")
+    step_opt_range: Optional[float] = Field(None, description="Default step for optimization range if applicable.")
+    category: Optional[str] = Field(None, description="UI Category (e.g., 'Entry Logic', 'Risk Management', 'General').")
 
 class StrategyInfo(BaseModel):
     """Provides metadata about an available trading strategy."""
@@ -137,10 +119,8 @@ class BacktestRequest(BaseModel):
     @field_validator('timeframe')
     @classmethod
     def timeframe_must_be_valid_interval(cls, v: str) -> str:
-        # Reuse or adapt the interval validation from HistoricalDataRequest
-        # This ensures consistency in how intervals are specified.
         try:
-            HistoricalDataRequest.interval_must_be_valid(v) # Call the validator from the other model
+            HistoricalDataRequest.interval_must_be_valid(v)
         except ValueError as e:
             raise ValueError(f"Invalid timeframe: {e}")
         return v
@@ -159,29 +139,30 @@ class Trade(BaseModel):
 class BacktestResult(BaseModel):
     """Response model containing the results of a backtest."""
     request: BacktestRequest
-    # Performance Metrics
     net_pnl: float
     total_trades: int
     winning_trades: int
     losing_trades: int
-    win_rate: Optional[float] = None # winning_trades / total_trades if total_trades > 0
+    win_rate: Optional[float] = None
     average_profit_per_trade: Optional[float] = None
     average_loss_per_trade: Optional[float] = None
-    profit_factor: Optional[float] = None # Gross profit / Gross loss
-    max_drawdown: float # Maximum peak-to-trough decline during a specific period
+    profit_factor: Optional[float] = None
+    max_drawdown: float # Percentage
     sharpe_ratio: Optional[float] = Field(None, description="Risk-adjusted return (requires risk-free rate, not implemented here).")
     sortino_ratio: Optional[float] = Field(None, description="Risk-adjusted return focusing on downside deviation.")
-    # Equity Curve
     equity_curve: List[Dict[str, Any]] = Field(description="List of equity values over time, e.g., [{'time': datetime, 'equity': float}].")
     trades: List[Trade]
     logs: Optional[List[str]] = Field(None, description="Optional logs or messages generated during the backtest.")
+    # Proposed addition for drawdown curve
+    drawdown_curve: Optional[List[Dict[str, Any]]] = Field(None, description="List of drawdown values over time, e.g., [{'time': datetime, 'value': float (percentage)}].")
+
 
 class OptimizationParameterRange(BaseModel):
     """Defines the range and step for a parameter during optimization."""
     name: str = Field(description="Name of the strategy parameter to optimize.")
-    start_value: Any # Can be int or float
-    end_value: Any   # Can be int or float
-    step: Any      # Can be int or float
+    start_value: Any
+    end_value: Any
+    step: Any
 
     @field_validator('end_value')
     @classmethod
@@ -197,10 +178,9 @@ class OptimizationParameterRange(BaseModel):
     def step_must_be_positive(cls, v: Any, values: Any) -> Any:
         data = values.data
         if 'start_value' in data and isinstance(data['start_value'], (int, float)) and isinstance(v, (int, float)):
-            if v <= 0:
+            if v <= 0: # Step must be positive, direction is handled in generation
                 raise ValueError("step must be a positive value.")
         return v
-
 
 class OptimizationRequest(BaseModel):
     """Request model for running a strategy parameter optimization."""
@@ -224,24 +204,77 @@ class OptimizationJobStatus(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     estimated_remaining_time_seconds: Optional[float] = None
-    current_iteration: Optional[int] = None # Renamed from current_combination_count
-    total_iterations: Optional[int] = None  # Renamed from total_combinations
+    current_iteration: Optional[int] = None
+    total_iterations: Optional[int] = None
 
 class OptimizationResultEntry(BaseModel):
     """Result of a single backtest run within an optimization process."""
     parameters: Dict[str, Any] = Field(description="The combination of parameters used for this run.")
-    performance_metrics: Dict[str, Any] = Field(description="Key-value pairs of performance metrics for this run (e.g., {'net_pnl': 1234.5}).") # Renamed from 'performance'
+    performance_metrics: Dict[str, Any] = Field(description="Key-value pairs of performance metrics for this run (e.g., {'net_pnl': 1234.5}).")
 
 class OptimizationResultsResponse(BaseModel):
     """Response model containing the results of an optimization job."""
     job_id: str
     strategy_id: str
-    request_details: OptimizationRequest # Include the original request for context
-    results: List[OptimizationResultEntry] = Field(description="List of results for each parameter combination tested.")
+    request_details: OptimizationRequest
+    results: List[OptimizationResultEntry]
     best_result: Optional[OptimizationResultEntry] = Field(None, description="The best performing result based on the optimization metric.")
-    summary_stats: Optional[Dict[str, Any]] = Field(None, description="Overall summary, e.g., total combinations, time taken.") # Renamed from summary
+    summary_stats: Optional[Dict[str, Any]] = Field(None, description="Overall summary, e.g., total combinations, time taken.")
     total_combinations_tested: int
 
+# --- New Models for Chart Data Endpoint ---
+
+class ChartDataRequest(BaseModel):
+    exchange: str
+    token: str
+    timeframe: str = Field(description="e.g., '1min', '5min', '1H', '1D'")
+    start_date: Optional[date] = None # Optional for loading specific historical range
+    end_date: Optional[date] = None   # Optional for loading specific historical range
+    strategy_id: Optional[str] = Field(None, description="Nullable: if no strategy, only OHLC")
+    strategy_params: Optional[Dict[str, Any]] = Field({}, description="Current parameters for the selected strategy")
+
+    @field_validator('timeframe')
+    @classmethod
+    def timeframe_must_be_valid_chart_interval(cls, v: str) -> str:
+        try:
+            # Reuse interval validation, ensuring it covers chart-friendly formats
+            HistoricalDataRequest.interval_must_be_valid(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid timeframe for chart: {e}")
+        return v
+
+class IndicatorDataPoint(BaseModel):
+    time: int # UNIX timestamp in seconds
+    value: Optional[float] = None # Allow for NaN or gaps in indicator data
+
+class IndicatorConfig(BaseModel):
+    color: str = "blue"
+    lineWidth: int = 1
+    paneId: str = "main_chart" # e.g., "main_chart", "rsi_pane"
+    priceScaleId: Optional[str] = None # e.g., "rsi_price_scale" for separate y-axis
+
+class IndicatorSeries(BaseModel):
+    name: str # For display/legend, e.g., "Fast EMA (10)"
+    data: List[IndicatorDataPoint]
+    config: IndicatorConfig
+
+class TradeMarker(BaseModel):
+    time: int # UNIX timestamp in seconds
+    position: Literal["aboveBar", "belowBar", "inBar"] = "belowBar"
+    color: str = "green"
+    shape: Literal["arrowUp", "arrowDown", "circle", "square"] = "arrowUp"
+    text: Optional[str] = None
+
+class ChartDataResponse(BaseModel):
+    ohlc_data: List[OHLCDataPoint] # OHLCDataPoint.time should be UNIX timestamp
+    indicator_data: List[IndicatorSeries] = []
+    trade_markers: List[TradeMarker] = []
+    chart_header_info: str = ""
+    timeframe_actual: str
+
+class CancelOptimizationResponse(BaseModel):
+    status: str
+    job_id: str
 
 # Example of how you might define a more specific parameter type using Literal for 'type'
 class IntStrategyParameter(StrategyParameter):
@@ -257,6 +290,3 @@ class FloatStrategyParameter(StrategyParameter):
     default: float
     value: Optional[float] = None
     # min_value, max_value, step are already float in base
-
-# This shows how you could make StrategyParameter more specific if needed,
-# but often the flexible version is easier to work with initially.

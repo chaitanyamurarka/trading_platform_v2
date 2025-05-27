@@ -6,6 +6,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date, timedelta, time as dt_time
 from typing import List, Dict, Optional, Union, TYPE_CHECKING, Any # Added TYPE_CHECKING and Any
+from .models import TokenInfo # Ensure TokenInfo is imported
 
 # Conditional import for ShoonyaApiPy for type hinting
 if TYPE_CHECKING:
@@ -352,33 +353,35 @@ async def _fetch_1min_data_from_api(
                 return [] # Return empty on final retry exception #
     return [] #
 
-
 def _resample_ohlc_data(
     one_min_data_points: List[models.OHLCDataPoint],
     target_interval_str: str 
 ) -> List[models.OHLCDataPoint]:
     """Resamples 1-minute OHLC data to a higher timeframe using Pandas."""
-    if not one_min_data_points: #
+    if not one_min_data_points:
         return []
     
-    rule = target_interval_str.upper() #
-    if rule.isdigit(): #
-        rule += 'T' # Assume minutes #
-    elif rule == 'D': #
+    rule = target_interval_str.upper()
+    # Standardize rule for pandas resampling
+    if rule.isdigit():
+        rule += 'min' # CHANGED: 'T' to 'min' for minute-based resampling
+    elif rule == 'D':
         pass 
-    elif rule.endswith('H'): #
+    elif rule.endswith('H'):
         pass
+    # Add other common rules if necessary, e.g., W for weekly, M for monthly
     
-    if rule == '1T': # Already 1-minute #
-        return one_min_data_points #
+    # Handle requests that are already 1-minute or effectively 1-minute
+    if rule in ['1min', '1T']: # '1T' might still appear from older interval codes
+        return one_min_data_points
 
     try:
-        df = pd.DataFrame([item.model_dump() for item in one_min_data_points]) #
-        if df.empty: #
-            return [] #
+        df = pd.DataFrame([item.model_dump() for item in one_min_data_points])
+        if df.empty:
+            return []
             
-        df['time'] = pd.to_datetime(df['time']) # Ensure datetime objects #
-        df.set_index('time', inplace=True) #
+        df['time'] = pd.to_datetime(df['time'])
+        df.set_index('time', inplace=True)
 
         resampled_df = df.resample(rule).agg({
             'open': 'first',
@@ -387,25 +390,24 @@ def _resample_ohlc_data(
             'close': 'last',
             'volume': 'sum',
             'oi': 'last' 
-        }).dropna(subset=['open']) # Remove intervals that don't have any data #
+        }).dropna(subset=['open'])
 
         resampled_data = []
-        for timestamp, row_data in resampled_df.iterrows(): #
+        for timestamp, row_data in resampled_df.iterrows():
             resampled_data.append(models.OHLCDataPoint(
-                time=timestamp.to_pydatetime(), # Pandas timestamp to python datetime #
-                open=row_data['open'], #
-                high=row_data['high'], #
-                low=row_data['low'], #
-                close=row_data['close'], #
-                volume=int(row_data['volume']) if pd.notna(row_data['volume']) else None, #
-                oi=int(row_data['oi']) if pd.notna(row_data['oi']) else None, #
+                time=timestamp.to_pydatetime(),
+                open=row_data['open'],
+                high=row_data['high'],
+                low=row_data['low'],
+                close=row_data['close'],
+                volume=int(row_data['volume']) if pd.notna(row_data['volume']) else None,
+                oi=int(row_data['oi']) if pd.notna(row_data['oi']) else None,
             ))
-        logger.info(f"Resample: {len(one_min_data_points)} (1-min) -> {len(resampled_data)} ({rule}) for interval '{target_interval_str}'.") #
-        return resampled_data #
+        logger.info(f"Resample: {len(one_min_data_points)} (1-min) -> {len(resampled_data)} ({rule}) for interval '{target_interval_str}'.")
+        return resampled_data
     except Exception as e:
-        logger.error(f"Resample: Error resampling to {target_interval_str} (rule: {rule}): {e}", exc_info=True) #
-        return one_min_data_points # Fallback to 1-min on error, or handle differently #
-
+        logger.error(f"Resample: Error resampling to {target_interval_str} (rule: {rule}): {e}", exc_info=True)
+        return one_min_data_points # Fallback or handle differently
 
 async def get_historical_data_orchestrator(
     exchange: str,
@@ -523,3 +525,45 @@ async def fetch_and_store_historical_data(
             count=0,
             message=f"An internal server error occurred: {str(e)}"
         ) #
+  
+async def get_token_info(exchange: str, token: str) -> Optional[TokenInfo]:
+    """
+    Retrieves detailed information for a specific instrument token.
+    """
+    exchange_upper = exchange.upper()
+    try:
+        # CORRECTED: Use the existing load_scripmaster function
+        scripmaster_df = load_scripmaster(exchange_upper) 
+    except FileNotFoundError:
+        logger.warning(f"Scripmaster not found for {exchange_upper} when attempting to get token info for {token}.")
+        return None
+    
+    if scripmaster_df is None or scripmaster_df.empty: # Should be caught by FileNotFoundError if df is None due to that
+        logger.warning(f"Scripmaster is None or empty for {exchange_upper} when getting token info for {token}.")
+        return None
+
+    # Ensure 'Token' column (or your equivalent) is string for comparison
+    # Assuming your scripmaster loader (load_scripmaster) already handles Token to string conversion
+    # If not, ensure it here: scripmaster_df['Token'] = scripmaster_df['Token'].astype(str)
+    
+    token_data = scripmaster_df[scripmaster_df['Token'] == token] # 'Token' should match your CSV header
+
+    if token_data.empty:
+        logger.warning(f"Token {token} not found in scripmaster for exchange {exchange_upper}.")
+        return None
+
+    row = token_data.iloc[0]
+    
+    # Adjust these .get() calls to match your actual scripmaster column names
+    # Defaulting to 'N/A' or derived values if specific columns are missing.
+    symbol_val = row.get('Symbol', 'N/A') # Ensure 'Symbol' matches your CSV header
+    trading_symbol_val = row.get('TradingSymbol', row.get('Tsym', f"{symbol_val}-{token}")) # Check for 'TradingSymbol' or 'Tsym'
+    instrument_val = row.get('Instrument', row.get('Instname', 'N/A')) # Check for 'Instrument' or 'Instname'
+
+    return TokenInfo(
+        exchange=exchange_upper,
+        token=str(row['Token']), # Ensure 'Token' is correct
+        symbol=str(symbol_val),
+        trading_symbol=str(trading_symbol_val),
+        instrument=str(instrument_val) if pd.notna(instrument_val) else None
+    )
