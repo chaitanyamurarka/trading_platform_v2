@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Analysis Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        /* Custom Styles */
+        body {
+            font-family: 'Inter', sans-serif; /* Assuming Inter is loaded or use a Tailwind default */
+            background-color: #111827; /* Dark background */
+            color: #d1d5db; /* Light gray text */
+        }
+        .nav-link {
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .nav-link.active {
+            background-color: #374151; /* Darker gray for active link */
+            color: #ffffff;
+        }
+        .nav-link:hover {
+            background-color: #1f2937; /* Slightly lighter gray on hover */
+        }
+        .card {
+            background-color: #1f2937; /* Card background */
+            border: 1px solid #374151; /* Card border */
+            border-radius: 0.5rem; /* Rounded corners for cards */
+        }
+        .input-field {
+            background-color: #374151;
+            border: 1px solid #4b5563;
+            color: #e5e7eb;
+            border-radius: 0.375rem;
+            padding: 0.5rem 0.75rem;
+        }
+        .input-field:focus {
+            outline: none;
+            border-color: #60a5fa; /* Blue border on focus */
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+        }
+        .btn {
+            padding: 0.625rem 1.25rem;
+            border-radius: 0.375rem;
+            font-weight: 500;
+            transition: background-color 0.2s;
+            cursor: pointer;
+        }
+        .btn-primary {
+            background-color: #3b82f6; /* Blue */
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #2563eb;
+        }
+        .btn-secondary {
+            background-color: #4b5563; /* Gray */
+            color: white;
+        }
+        .btn-secondary:hover {
+            background-color: #374151;
+        }
+        .btn-danger {
+            background-color: #ef4444; /* Red */
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #dc2626;
+        }
+        .table-header {
+            background-color: #374151;
+        }
+        .table-row:nth-child(even) {
+            background-color: #1f2937;
+        }
+        .table-row:nth-child(odd) {
+            background-color: #27303f; /* Slightly different for odd rows */
+        }
+        .modal {
+            background-color: rgba(17, 24, 39, 0.8); /* Semi-transparent dark background for modal overlay */
+        }
+        .modal-content {
+            background-color: #1f2937;
+            border: 1px solid #374151;
+        }
+        /* Custom scrollbar for dark theme */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+        #chartContainer {
+            width: 100%;
+            height: 500px; /* Default height, can be adjusted */
+        }
+        .loading-spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #3b82f6; /* Blue to match primary button */
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .parameter-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+    </style>
+</head>
+<body class="text-gray-300">
+
+    <nav class="bg-gray-900 p-4 shadow-lg">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="text-white text-2xl font-bold">Trading Platform</div>
+            <div class="space-x-2">
+                <button id="nav-dashboard" class="nav-link px-4 py-2 rounded-md text-sm font-medium">Dashboard</button>
+                <button id="nav-backtesting" class="nav-link px-4 py-2 rounded-md text-sm font-medium">Backtesting</button>
+                <button id="nav-optimization" class="nav-link px-4 py-2 rounded-md text-sm font-medium">Optimization</button>
+            </div>
+        </div>
+    </nav>
+
+    <main id="main-content" class="container mx-auto p-4 mt-4">
+        </main>
+
+    <div id="genericModal" class="fixed inset-0 z-50 hidden items-center justify-center modal">
+        <div class="modal-content p-6 rounded-lg shadow-xl w-full max-w-md">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="modalTitle" class="text-xl font-semibold text-white">Modal Title</h3>
+                <button id="closeModal" class="text-gray-400 hover:text-gray-200">&times;</button>
+            </div>
+            <div id="modalBody" class="text-gray-300">
+                <p>Modal content goes here...</p>
+            </div>
+            <div id="modalFooter" class="mt-6 text-right space-x-2">
+                </div>
+        </div>
+    </div>
+
+    <div id="loadingOverlay" class="fixed inset-0 z-[100] hidden items-center justify-center bg-gray-900 bg-opacity-75">
+        <div class="loading-spinner"></div>
+        <p class="ml-3 text-white text-lg">Loading, please wait...</p>
+    </div>
+
+
+    <script>
+        // --- Global Configuration ---
+        const API_BASE_URL = 'http://localhost:8000'; // Replace with your actual API base URL
+
+        // --- Lightweight Charts v4.1.3 Specifics ---
+        // Ensure the global LightweightCharts object is available from the script include
+        // For v4.1.3, chart creation is: LightweightCharts.createChart(...)
+        // Series addition: chart.addCandlestickSeries(...), chart.addLineSeries(...), chart.addHistogramSeries(...)
+
+        // --- Page Templates (will be populated by JS) ---
+        const pageTemplates = {
+            dashboard: `
+                <div id="dashboard-page" class="space-y-6">
+                    <h1 class="text-3xl font-bold text-white mb-6">Dashboard</h1>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 p-4 card">
+                        <div>
+                            <label for="exchangeSelect" class="block text-sm font-medium mb-1">Exchange</label>
+                            <select id="exchangeSelect" class="input-field w-full">
+                                </select>
+                        </div>
+                        <div>
+                            <label for="symbolSelect" class="block text-sm font-medium mb-1">Symbol</label>
+                            <select id="symbolSelect" class="input-field w-full">
+                                </select>
+                        </div>
+                        <div>
+                            <label for="timeframeSelect" class="block text-sm font-medium mb-1">Timeframe</label>
+                            <select id="timeframeSelect" class="input-field w-full">
+                                <option value="1min">1 Minute</option>
+                                <option value="3min">3 Minutes</option>
+                                <option value="5min">5 Minutes</option>
+                                <option value="15min">15 Minutes</option>
+                                <option value="30min">30 Minutes</option>
+                                <option value="60min">1 Hour</option>
+                                <option value="day" selected>1 Day</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="strategySelect" class="block text-sm font-medium mb-1">Strategy</label>
+                            <select id="strategySelect" class="input-field w-full">
+                                </select>
+                        </div>
+                    </div>
+
+                    <div id="strategyParamsCard" class="card p-4 mb-6">
+                        <h2 class="text-xl font-semibold text-white mb-3">Strategy Parameters</h2>
+                        <div id="strategyParamsContainer" class="parameter-grid">
+                            </div>
+                        <button id="applyChartButton" class="btn btn-primary mt-4">Apply to Chart</button>
+                    </div>
+
+                    <div id="chartContainerWrapper" class="card p-1">
+                         <div id="chartHeader" class="text-lg font-semibold p-3 text-center text-white">Loading Chart...</div>
+                         <div id="chartContainer"></div>
+                    </div>
+
+                    <div class="flex space-x-4 mt-6">
+                        <button id="goToBacktestButton" class="btn btn-secondary">Run Full Backtest</button>
+                        <button id="goToOptimizeButton" class="btn btn-secondary">Optimize Strategy</button>
+                    </div>
+                </div>
+            `,
+            backtesting: `
+                <div id="backtesting-page" class="space-y-6">
+                    <h1 class="text-3xl font-bold text-white mb-6">Strategy Backtesting</h1>
+                    <div class="card p-6 mb-6">
+                        <h2 class="text-xl font-semibold text-white mb-4">Backtest Configuration</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            <div>
+                                <label for="backtestExchangeSelect" class="block text-sm font-medium mb-1">Exchange</label>
+                                <select id="backtestExchangeSelect" class="input-field w-full"></select>
+                            </div>
+                            <div>
+                                <label for="backtestSymbolSelect" class="block text-sm font-medium mb-1">Symbol</label>
+                                <select id="backtestSymbolSelect" class="input-field w-full"></select>
+                            </div>
+                            <div>
+                                <label for="backtestTimeframeSelect" class="block text-sm font-medium mb-1">Timeframe</label>
+                                <select id="backtestTimeframeSelect" class="input-field w-full">
+                                    <option value="1min">1 Minute</option>
+                                    <option value="3min">3 Minutes</option>
+                                    <option value="5min">5 Minutes</option>
+                                    <option value="15min">15 Minutes</option>
+                                    <option value="30min">30 Minutes</option>
+                                    <option value="60min">1 Hour</option>
+                                    <option value="day" selected>1 Day</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="backtestStrategySelect" class="block text-sm font-medium mb-1">Strategy</label>
+                                <select id="backtestStrategySelect" class="input-field w-full"></select>
+                            </div>
+                             <div>
+                                <label for="backtestInitialCapital" class="block text-sm font-medium mb-1">Initial Capital</label>
+                                <input type="number" id="backtestInitialCapital" class="input-field w-full" value="100000">
+                            </div>
+                            <div>
+                                <label for="backtestStartDate" class="block text-sm font-medium mb-1">Start Date</label>
+                                <input type="date" id="backtestStartDate" class="input-field w-full">
+                            </div>
+                            <div>
+                                <label for="backtestEndDate" class="block text-sm font-medium mb-1">End Date</label>
+                                <input type="date" id="backtestEndDate" class="input-field w-full">
+                            </div>
+                        </div>
+                        <div id="backtestStrategyParamsContainer" class="mt-6">
+                             <h3 class="text-lg font-semibold text-white mb-3">Strategy Parameters</h3>
+                             <div class="parameter-grid"></div>
+                        </div>
+                        <button id="runBacktestButton" class="btn btn-primary mt-6">Run Backtest</button>
+                    </div>
+
+                    <div id="backtestResultsContainer" class="hidden space-y-6">
+                        <div class="card p-6">
+                            <h2 class="text-xl font-semibold text-white mb-4">Performance Summary</h2>
+                            <div id="performanceSummary" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 text-sm"></div>
+                        </div>
+                        <div class="card p-1">
+                             <h2 class="text-xl font-semibold text-white mb-2 p-3 text-center">Equity Curve</h2>
+                             <div id="equityCurveChartContainer" style="width: 100%; height: 400px;"></div>
+                        </div>
+                        <div class="card p-1">
+                             <h2 class="text-xl font-semibold text-white mb-2 p-3 text-center">Drawdown Curve</h2>
+                             <div id="drawdownChartContainer" style="width: 100%; height: 300px;"></div>
+                        </div>
+                        <div class="card p-6">
+                            <h2 class="text-xl font-semibold text-white mb-4">Trades List</h2>
+                            <div class="overflow-x-auto">
+                                <table class="min-w-full">
+                                    <thead class="table-header">
+                                        <tr>
+                                            <th class="px-4 py-2 text-left">Entry Time</th>
+                                            <th class="px-4 py-2 text-left">Type</th>
+                                            <th class="px-4 py-2 text-right">Entry Price</th>
+                                            <th class="px-4 py-2 text-left">Exit Time</th>
+                                            <th class="px-4 py-2 text-right">Exit Price</th>
+                                            <th class="px-4 py-2 text-right">PNL</th>
+                                            <th class="px-4 py-2 text-left">Exit Reason</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tradesTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `,
+            optimization: `
+                <div id="optimization-page" class="space-y-6">
+                    <h1 class="text-3xl font-bold text-white mb-6">Strategy Optimization</h1>
+                     <div class="card p-6 mb-6">
+                        <h2 class="text-xl font-semibold text-white mb-4">Optimization Configuration</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            <div>
+                                <label for="optExchangeSelect" class="block text-sm font-medium mb-1">Exchange</label>
+                                <select id="optExchangeSelect" class="input-field w-full"></select>
+                            </div>
+                            <div>
+                                <label for="optSymbolSelect" class="block text-sm font-medium mb-1">Symbol</label>
+                                <select id="optSymbolSelect" class="input-field w-full"></select>
+                            </div>
+                            <div>
+                                <label for="optTimeframeSelect" class="block text-sm font-medium mb-1">Timeframe</label>
+                                <select id="optTimeframeSelect" class="input-field w-full">
+                                    <option value="day" selected>1 Day</option>
+                                    </select>
+                            </div>
+                            <div>
+                                <label for="optStrategySelect" class="block text-sm font-medium mb-1">Strategy</label>
+                                <select id="optStrategySelect" class="input-field w-full"></select>
+                            </div>
+                             <div>
+                                <label for="optInitialCapital" class="block text-sm font-medium mb-1">Initial Capital</label>
+                                <input type="number" id="optInitialCapital" class="input-field w-full" value="100000">
+                            </div>
+                            <div>
+                                <label for="optStartDate" class="block text-sm font-medium mb-1">Start Date</label>
+                                <input type="date" id="optStartDate" class="input-field w-full">
+                            </div>
+                            <div>
+                                <label for="optEndDate" class="block text-sm font-medium mb-1">End Date</label>
+                                <input type="date" id="optEndDate" class="input-field w-full">
+                            </div>
+                            <div>
+                                <label for="optMetricSelect" class="block text-sm font-medium mb-1">Metric to Optimize</label>
+                                <select id="optMetricSelect" class="input-field w-full">
+                                    <option value="net_pnl" selected>Net PNL</option>
+                                    <option value="sharpe_ratio">Sharpe Ratio</option>
+                                    <option value="win_rate">Win Rate</option>
+                                    <option value="profit_factor">Profit Factor</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="optStrategyParamsContainer" class="mt-6">
+                             <h3 class="text-lg font-semibold text-white mb-3">Optimization Parameter Ranges</h3>
+                             <!-- Example for one param:
+                             <div class="grid grid-cols-3 gap-2 items-center">
+                                 <label class="text-sm">Fast EMA:</label>
+                                 <input type="number" placeholder="Min" class="input-field">
+                                 <input type="number" placeholder="Max" class="input-field">
+                                 <input type="number" placeholder="Step" class="input-field"> (optional)
+                             </div>
+                             -->
+                        </div>
+                        <button id="startOptimizationButton" class="btn btn-primary mt-6">Start Optimization</button>
+                        <button id="cancelOptimizationButton" class="btn btn-danger mt-6 hidden">Cancel Optimization</button>
+                    </div>
+
+                    <div id="optimizationStatusContainer" class="card p-4 mb-6 hidden">
+                        <h2 class="text-xl font-semibold text-white mb-2">Optimization Status</h2>
+                        <div id="optimizationJobId" class="text-sm"></div>
+                        <div id="optimizationStatus" class="text-sm"></div>
+                        <div id="optimizationProgress" class="w-full bg-gray-700 rounded-full h-2.5 mt-2">
+                            <div id="optimizationProgressBar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+                        </div>
+                        <div id="optimizationMessage" class="text-sm mt-1"></div>
+                    </div>
+
+                    <div id="optimizationResultsContainer" class="hidden card p-6">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-semibold text-white">Optimization Results</h2>
+                            <button id="downloadCsvButton" class="btn btn-secondary text-sm">Download CSV</button>
+                        </div>
+                        <div id="bestResultSummary" class="mb-4 p-3 bg-gray-700 rounded"></div>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full text-sm">
+                                <thead id="optimizationResultsThead" class="table-header"></thead>
+                                <tbody id="optimizationResultsTbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `
+        };
+
+        // --- DOM Elements ---
+        const mainContent = document.getElementById('main-content');
+        const navDashboard = document.getElementById('nav-dashboard');
+        const navBacktesting = document.getElementById('nav-backtesting');
+        const navOptimization = document.getElementById('nav-optimization');
+        const genericModal = document.getElementById('genericModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalBody = document.getElementById('modalBody');
+        const modalFooter = document.getElementById('modalFooter');
+        const closeModalButton = document.getElementById('closeModal');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+
+        // --- State ---
+        let currentPage = 'dashboard'; // Default page
+        let chartInstance = null; // To hold the Lightweight Chart instance
+        let candlestickSeries = null;
+        let indicatorSeries = {}; // To hold various indicator series { seriesName: seriesInstance }
+        let tradeMarkerSeries = null; // For buy/sell markers
+
+        let currentSymbolData = {
+            exchange: 'NSE',
+            token: '3045', // TATAMOTORS token (example, will be fetched)
+            symbol: 'TATAMOTORS',
+            timeframe: 'day',
+            strategyId: 'ema_crossover',
+            strategyParams: {} // Will be populated
+        };
+        let optimizationJobId = null;
+        let optimizationStatusInterval = null;
+
+        // --- Helper Functions (to be moved to ui.js or utils.js later) ---
+        function showLoading(show = true) {
+            loadingOverlay.style.display = show ? 'flex' : 'none';
+        }
+
+        function showModal(title, bodyContent, footerButtons = []) {
+            modalTitle.textContent = title;
+            modalBody.innerHTML = bodyContent; // Use innerHTML if bodyContent is HTML
+            modalFooter.innerHTML = '';
+            footerButtons.forEach(btnConfig => {
+                const button = document.createElement('button');
+                button.textContent = btnConfig.text;
+                button.className = `btn ${btnConfig.class || 'btn-secondary'}`;
+                button.onclick = btnConfig.onClick;
+                modalFooter.appendChild(button);
+            });
+            genericModal.style.display = 'flex';
+        }
+
+        function hideModal() {
+            genericModal.style.display = 'none';
+        }
+        closeModalButton.addEventListener('click', hideModal);
+
+
+        // --- Navigation ---
+        function setActiveNav(page) {
+            [navDashboard, navBacktesting, navOptimization].forEach(nav => nav.classList.remove('active'));
+            document.getElementById(`nav-${page}`).classList.add('active');
+        }
+
+        function loadPage(pageName) {
+            if (!pageTemplates[pageName]) {
+                console.error(`Page template for ${pageName} not found.`);
+                mainContent.innerHTML = `<p class="text-red-500">Error: Page not found.</p>`;
+                return;
+            }
+            currentPage = pageName;
+            mainContent.innerHTML = pageTemplates[pageName];
+            setActiveNav(pageName);
+
+            // Call page-specific initialization function
+            if (typeof window[`init${pageName.charAt(0).toUpperCase() + pageName.slice(1)}Page`] === 'function') {
+                window[`init${pageName.charAt(0).toUpperCase() + pageName.slice(1)}Page`]();
+            } else {
+                console.warn(`Initialization function for ${pageName} not found.`);
+            }
+        }
+
+        navDashboard.addEventListener('click', () => loadPage('dashboard'));
+        navBacktesting.addEventListener('click', () => loadPage('backtesting'));
+        navOptimization.addEventListener('click', () => loadPage('optimization'));
+
+        // --- Initial Load ---
+        document.addEventListener('DOMContentLoaded', () => {
+            loadPage('dashboard'); // Load dashboard by default
+        });
+
+        // Placeholder for page-specific JS to be added later
+        // e.g., initDashboardPage(), initBacktestingPage(), initOptimizationPage()
+        // These will be in dashboard.js, backtesting.js, optimization.js
+    </script>
+
+    <script src="api.js" defer></script>
+    <script src="ui.js" defer></script>
+    <script src="chartSetup.js" defer></script>
+    <script src="dashboard.js" defer></script>
+    <script src="backtesting.js" defer></script>
+    <script src="optimization.js" defer></script>
+    </body>
+</html>

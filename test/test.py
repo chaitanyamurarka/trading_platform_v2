@@ -12,8 +12,8 @@ LOG_BUFFER = []
 
 DEFAULT_TEST_TOKEN = "3456" # NSE:TATAMOTORS as per previous context if available in scripmaster
 DEFAULT_TEST_EXCHANGE = "NSE"
-DEFAULT_TIMEFRAME_DAY = "D"
-DEFAULT_TIMEFRAME_MIN = "5" # For chart data testing, 5 min
+DEFAULT_TIMEFRAME_DAY = "1"
+DEFAULT_TIMEFRAME_MIN = "1" # For chart data testing, 5 min
 EMA_CROSSOVER_STRATEGY_ID = "ema_crossover"
 
 OPTIMIZATION_POLL_INTERVAL = 5 # Reduced for faster testing of cancel
@@ -368,7 +368,7 @@ def test_chart_data_with_strategy():
 def test_optimization_flow(): # Now includes cancellation test
     optimization_job_id = None
     end_date_opt = datetime.now()
-    start_date_opt = end_date_opt - timedelta(days=30) # Shorter for quicker test
+    start_date_opt = end_date_opt - timedelta(days=365) # Shorter for quicker test
 
     payload_start = {
         "strategy_id": EMA_CROSSOVER_STRATEGY_ID,
@@ -376,8 +376,8 @@ def test_optimization_flow(): # Now includes cancellation test
         "start_date": start_date_opt.strftime("%Y-%m-%d"), "end_date": end_date_opt.strftime("%Y-%m-%d"),
         "timeframe": DEFAULT_TIMEFRAME_DAY, # Day timeframe for optimization usually makes sense
         "parameter_ranges": [ # Use UI param names from StrategyInfo
-            {"name": "fast_ma_length", "start_value": 5, "end_value": 10, "step": 5}, # small range for quick test
-            {"name": "slow_ma_length", "start_value": 15, "end_value": 20, "step": 5}
+            {"name": "fast_ma_length", "start_value": 5, "end_value": 100, "step": 1}, # small range for quick test
+            {"name": "slow_ma_length", "start_value": 15, "end_value": 500, "step": 1}
         ],
         "metric_to_optimize": "net_pnl", 
         "initial_capital": 75000.0,

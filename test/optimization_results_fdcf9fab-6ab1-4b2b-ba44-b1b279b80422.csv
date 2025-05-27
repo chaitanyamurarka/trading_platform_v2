@@ -1,5 +1,0 @@
-fast_ema_period,slow_ema_period,stop_loss_pct,take_profit_pct,final_equity,losing_trades,max_drawdown_pct,net_pnl,total_trades,win_rate,winning_trades
-5,15,2.0,4.0,75028.02,0,0.0,28.02,1,100.0,1
-5,20,2.0,4.0,75028.02,0,0.0,28.02,1,100.0,1
-10,15,2.0,4.0,75028.02,0,0.0,28.02,1,100.0,1
-10,20,2.0,4.0,75028.02,0,0.0,28.02,1,100.0,1

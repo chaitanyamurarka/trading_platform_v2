@@ -270,7 +270,21 @@ async def generate_chart_data(
         
         # Add execution_price_type for strategy, default to 'close' for charting signals
         current_strategy_params['execution_price_type'] = current_strategy_params.get('execution_price_type', 'close')
-
+        typed_params = current_strategy_params.copy()
+        if strategy_class:
+            strategy_info = strategy_class.get_info()
+            for p_info in strategy_info.parameters:
+                param_name = p_info.name
+                if param_name in typed_params and typed_params[param_name] is not None:
+                    try:
+                        if p_info.type == 'int':
+                            typed_params[param_name] = int(float(typed_params[param_name]))
+                        elif p_info.type == 'float':
+                            typed_params[param_name] = float(typed_params[param_name])
+                        # Add other type coercions if needed (e.g., bool)
+                    except ValueError:
+                        logger.warning(f"Could not correctly type cast param '{param_name}' with value '{typed_params[param_name]}' to type '{p_info.type}'")
+        # Then use typed_params when initializing the strategy:
 
         try:
             strategy_instance = strategy_class(shared_ohlc_data=ohlc_df, params=current_strategy_params, portfolio=temp_portfolio)
