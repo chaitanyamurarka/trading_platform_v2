@@ -2,7 +2,7 @@
 import pandas as pd
 import itertools
 import uuid
-from datetime import datetime
+from datetime import datetime,timezone
 from typing import Dict, Any, List, Type, Optional, Tuple # Added Tuple
 import time
 import numpy as np
@@ -270,7 +270,15 @@ async def _execute_optimization_task(
             execution_price_types = np.full(n_combinations, exec_price_type_int, dtype=np.int64)
 
             start_run_time = time.time()
-            final_pnl_arr, total_trades_arr, winning_trades_arr, losing_trades_arr, max_drawdown_arr = run_ema_crossover_optimization_numba(
+            (
+                final_pnl_arr, total_trades_arr, winning_trades_arr, 
+                losing_trades_arr, max_drawdown_arr,
+                # Placeholder variables for detailed outputs not used by optimizer summary
+                _equity_curve_k0, _fast_ema_k0, _slow_ema_k0,
+                _trade_entry_idx_k0, _trade_exit_idx_k0,
+                _trade_entry_px_k0, _trade_exit_px_k0,
+                _trade_types_k0, _trade_pnls_k0, _actual_trade_count_k0
+            ) = run_ema_crossover_optimization_numba(
                 open_p, high_p, low_p, close_p, fast_emas, slow_emas, stop_losses, take_profits,
                 execution_price_types, request.initial_capital, n_combinations, n_candles
             )
@@ -469,3 +477,93 @@ def cancel_optimization_job(job_id: str) -> Dict[str, str]:
         return {"status": "cancellation_requested", "job_id": job_id, "message": "Cancellation request acknowledged. Task will stop if running."}
 
     return {"status": "error", "job_id": job_id, "message": f"Cannot cancel job in state: {job_status.status}"}
+
+def run_single_ema_crossover_numba_detailed(
+    historical_data_points: List[models.OHLCDataPoint],
+    strategy_params: Dict[str, Any],
+    initial_capital: float,
+    execution_price_type_str: str, # "open" or "close"
+    ohlc_data_df_index: pd.DatetimeIndex # Pass the DatetimeIndex for timestamp mapping
+) -> Tuple[np.ndarray, ...]: # Returns the raw 15-tuple from Numba
+    """
+    Wrapper to run the Numba kernel for a single EMA Crossover backtest
+    with detailed output requested.
+    """
+    if not historical_data_points:
+        raise ValueError("Historical data points list cannot be empty.")
+
+    # 1. Prepare OHLC data as NumPy arrays
+    # Ensure historical_data_points are sorted by time if not already
+    # For consistency, let's build a DataFrame first as done in other places
+    ohlc_dicts_for_df = []
+    for dp in historical_data_points:
+        # Ensure dp.time is a datetime object (it should be from data_module)
+        time_val = dp.time
+        if isinstance(dp.time, int): # If it's a timestamp, convert to datetime
+            time_val = datetime.fromtimestamp(dp.time, tz=timezone.utc)
+        
+        ohlc_dicts_for_df.append({
+            'time': time_val,
+            'open': dp.open, 'high': dp.high, 'low': dp.low, 'close': dp.close
+        })
+    
+    df = pd.DataFrame(ohlc_dicts_for_df)
+    if df.empty:
+        raise ValueError("DataFrame from historical_data_points is empty.")
+        
+    df['time'] = pd.to_datetime(df['time'])
+    df = df.set_index('time').sort_index() # Ensure it's sorted by time
+
+    open_p = df['open'].to_numpy(dtype=np.float64)
+    high_p = df['high'].to_numpy(dtype=np.float64)
+    low_p = df['low'].to_numpy(dtype=np.float64)
+    close_p = df['close'].to_numpy(dtype=np.float64)
+    n_candles = len(df)
+
+    if n_candles == 0:
+        raise ValueError("No candles available after processing historical data.")
+
+    # 2. Prepare strategy parameters as 1-element NumPy arrays
+    # Fetch defaults from EMACrossoverStrategy.get_info() if params are missing
+    # This part depends on EMACrossoverStrategy being accessible or passing defaults
+    # For simplicity, we'll assume strategy_params contains the necessary keys
+    # In a more robust setup, you'd fetch defaults from strategy_class.get_info()
+    
+    # Default values, assuming EMACrossoverStrategy structure:
+    default_fast_ema = 10 
+    default_slow_ema = 20
+    default_sl_pct = 0.0
+    default_tp_pct = 0.0
+
+    fast_ema_period = int(float(strategy_params.get("fast_ema_period", default_fast_ema)))
+    slow_ema_period = int(float(strategy_params.get("slow_ema_period", default_slow_ema)))
+    
+    # SL/TP percentages from strategy_params are raw percentages (e.g., 2 for 2%)
+    # Convert to decimal for Numba kernel (e.g., 0.02)
+    stop_loss_pct = float(strategy_params.get("stop_loss_pct", default_sl_pct)) / 100.0
+    take_profit_pct = float(strategy_params.get("take_profit_pct", default_tp_pct)) / 100.0
+
+    fast_ema_periods_arr = np.array([fast_ema_period], dtype=np.int64)
+    slow_ema_periods_arr = np.array([slow_ema_period], dtype=np.int64)
+    stop_loss_pcts_arr = np.array([stop_loss_pct], dtype=np.float64)
+    take_profit_pcts_arr = np.array([take_profit_pct], dtype=np.float64)
+    
+    exec_price_type_int = 1 if execution_price_type_str.lower() == "open" else 0
+    execution_price_types_arr = np.array([exec_price_type_int], dtype=np.int64)
+
+    n_combinations = 1
+
+    # 3. Call the Numba kernel
+    logger.info(f"Calling Numba kernel for single detailed backtest: FastEMA={fast_ema_period}, SlowEMA={slow_ema_period}, SL={stop_loss_pct*100}%, TP={take_profit_pct*100}%, Exec={execution_price_type_str}")
+    
+    numba_results_tuple = run_ema_crossover_optimization_numba(
+        open_p, high_p, low_p, close_p,
+        fast_ema_periods_arr, slow_ema_periods_arr,
+        stop_loss_pcts_arr, take_profit_pcts_arr,
+        execution_price_types_arr,
+        initial_capital,
+        n_combinations, # Should be 1
+        n_candles,
+        detailed_output_requested=True
+    )
+    return numba_results_tuple # This is the 15-element tuple

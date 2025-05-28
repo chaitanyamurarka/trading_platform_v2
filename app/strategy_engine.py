@@ -3,6 +3,7 @@ import pandas as pd
 from typing import Dict, Any, Type, List, Optional, Tuple, Union
 from datetime import datetime, date, timezone # Ensure timezone is imported
 import time 
+import numpy as np
 
 from .models import OHLCDataPoint, TradeEntry, EquityDrawdownPoint, BacktestPerformanceMetrics, BacktestResult
 from .config import logger
@@ -19,165 +20,207 @@ from .models import ( # Assuming these are defined in app/models.py
     Trade as ModelTrade # This is the Trade model used by PortfolioState
 )
 from .strategies.base_strategy import BaseStrategy, PortfolioState # BaseStrategy.get_indicator_series expects pd.DatetimeIndex
+from . import models
+# app/strategy_engine.py
+# ... (existing imports and _transform_numba_output_to_backtest_result function)
+
+# Import the Numba execution wrapper from optimizer_engine
+# We might need to adjust import paths or move the wrapper if circular dependencies arise.
+# For now, let's assume it can be imported or we can define it here.
+# To avoid circular import for now, let's assume run_single_ema_crossover_numba_detailed is accessible
+# or we can move it to a common numba_utils.py if this becomes an issue.
+# For this step, let's copy its definition into strategy_engine or a shared util.
+# To simplify, for now, let's imagine optimizer_engine is importable or restructure later.
+try:
+    from .optimizer_engine import run_single_ema_crossover_numba_detailed
+except ImportError:
+    # Fallback or define a placeholder if direct import is an issue due to structure
+    # This indicates a potential need for refactoring where shared Numba execution utilities live.
+    logger.warning("Could not import run_single_ema_crossover_numba_detailed from optimizer_engine. Numba path for single backtest might not work.")
+    def run_single_ema_crossover_numba_detailed(*args, **kwargs): # Placeholder
+        raise NotImplementedError("Numba single run function not available.")
+
 
 async def perform_backtest_simulation(
-    historical_data_points: List[OHLCDataPoint],
+    historical_data_points: List[models.OHLCDataPoint],
     strategy_class: Type[BaseStrategy],
     strategy_parameters: Dict[str, Any],
     initial_capital: float,
-) -> BacktestResult:
+) -> models.BacktestResult:
     
     if not historical_data_points:
-        return BacktestResult(error_message="No historical data provided for simulation.")
+        return models.BacktestResult(error_message="No historical data provided for simulation.")
 
+    # --- Prepare DataFrame (common for both paths) ---
     try:
-        df = pd.DataFrame([p.model_dump() for p in historical_data_points])
+        # Using model_dump for pydantic v2, or .dict() for v1
+        df_data = []
+        for p in historical_data_points:
+            item_dict = p.model_dump()
+            # Ensure time is datetime, convert if it's int timestamp
+            if isinstance(item_dict['time'], int):
+                item_dict['time'] = datetime.fromtimestamp(item_dict['time'], tz=timezone.utc)
+            df_data.append(item_dict)
+
+        df = pd.DataFrame(df_data)
+        if df.empty:
+             return models.BacktestResult(error_message="Historical data is empty after initial conversion.")
         df['time'] = pd.to_datetime(df['time'])
-        df = df.set_index('time') # df.index will be pd.Timestamp
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+        df = df.set_index('time').sort_index() # Ensure sort by time
+        
+        for col in ['open', 'high', 'low', 'close', 'volume']: # Ensure essential columns exist
+            if col not in df.columns:
+                 df[col] = np.nan # Add missing columns as NaN to avoid KeyError later
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Drop rows where essential OHLC are NaN after conversion
         df.dropna(subset=['open', 'high', 'low', 'close'], inplace=True)
         if df.empty:
-            return BacktestResult(error_message="Historical data became empty after cleaning.")
+            return models.BacktestResult(error_message="Historical data became empty after cleaning (OHLC NaNs).")
     except Exception as e:
         logger.error(f"Error processing historical data for backtest: {e}", exc_info=True)
-        return BacktestResult(error_message=f"Error processing historical data: {str(e)}")
+        return models.BacktestResult(error_message=f"Error processing historical data: {str(e)}")
 
-    try:
-        # Initialize PortfolioState
-        portfolio_state = PortfolioState(initial_capital=initial_capital)
-    except Exception as e:
-        logger.error(f"Error initializing PortfolioState for backtest: {e}", exc_info=True)
-        return BacktestResult(error_message=f"Error initializing portfolio state: {str(e)}")
-
-    try:
-        # Initialize strategy instance. shared_ohlc_data should be the DataFrame with DatetimeIndex.
-        # The EMACrossoverStrategy.__init__ expects shared_ohlc_data, params, and portfolio
-        strategy_instance = strategy_class(
-            shared_ohlc_data=df.copy(), # Pass a copy to avoid unintended modifications if df is reused
-            params=strategy_parameters,
-            portfolio=portfolio_state
-        )
-        # _initialize_strategy_state is called by super().__init__, which calculates EMAs
-    except Exception as e:
-        logger.error(f"Error initializing strategy '{strategy_class.get_info().name}' for backtest: {e}", exc_info=True)
-        return BacktestResult(error_message=f"Error initializing strategy '{strategy_class.get_info().name}': {str(e)}")
-
-    # --- Main Backtesting Loop ---
-    if df.empty:
-        return BacktestResult(error_message="No data to process for backtest after strategy initialization.")
-
-    # Record initial equity point using the first bar's data
-    # PortfolioState.record_equity expects a pandas Timestamp and a price
-    try:
-        strategy_instance.portfolio.record_equity(df.index[0], df['close'].iloc[0])
-    except IndexError:
-        logger.error("DataFrame is empty, cannot record initial equity.")
-        return BacktestResult(error_message="Cannot record initial equity, data is empty.")
-
-
-    for bar_idx in range(len(df)):
+    # --- MODIFIED SECTION: Dispatch to Numba or Python ---
+    if strategy_class.strategy_id == "ema_crossover":
+        logger.info(f"Using NUMBA path for single backtest of EMA Crossover strategy.")
         try:
-            # process_bar handles signal generation, SL/TP checks, and trade execution via portfolio methods
-            strategy_instance.process_bar(bar_idx)
+            # execution_price_type should be part of strategy_parameters
+            # BaseStrategy default for execution_price_type is 'close'
+            execution_price_type = strategy_parameters.get("execution_price_type", "close")
+
+            # Pass the original historical_data_points list, the wrapper will make a DF from it.
+            # Pass df.index for timestamp mapping.
+            numba_raw_results = run_single_ema_crossover_numba_detailed(
+                historical_data_points=historical_data_points, # Pass the original list
+                strategy_params=strategy_parameters,
+                initial_capital=initial_capital,
+                execution_price_type_str=execution_price_type,
+                ohlc_data_df_index=df.index # Pass the DatetimeIndex from the processed df
+            )
             
-            # Record equity after each bar is processed.
-            # The PortfolioState.record_equity method is used for this.
-            current_bar_timestamp = df.index[bar_idx] # This is a pd.Timestamp
-            current_bar_close = df['close'].iloc[bar_idx]
-            strategy_instance.portfolio.record_equity(current_bar_timestamp, current_bar_close)
+            # Transform Numba output to BacktestResult
+            # Pass the DatetimeIndex of the df used by Numba for accurate timestamp mapping
+            backtest_result = _transform_numba_output_to_backtest_result(
+                numba_raw_outputs=numba_raw_results,
+                ohlc_timestamps=df.index, 
+                initial_capital=initial_capital,
+                strategy_params_used=strategy_parameters
+            )
+            logger.info(f"Numba EMA Crossover backtest completed. Net PnL: {backtest_result.performance_metrics.net_pnl if backtest_result.performance_metrics else 'N/A'}")
+            return backtest_result
+            
+        except NotImplementedError: # If run_single_ema_crossover_numba_detailed was not imported
+             logger.error("Numba single run function is not implemented/imported. Falling back to Python path if available, or erroring.")
+             # Decide: either error out, or fall back to Python path (which would mean no consistency)
+             # Forcing Numba for consistency if strategy_id is ema_crossover:
+             return models.BacktestResult(error_message="EMA Crossover requires Numba path, but it's unavailable.")
         except Exception as e:
-            logger.error(f"Error during simulation at bar {bar_idx} ({df.index[bar_idx]}): {e}", exc_info=True)
-            # Optionally, continue simulation for partial results or stop
-            return BacktestResult(error_message=f"Error during simulation at bar {bar_idx} ({df.index[bar_idx]}): {str(e)}")
+            logger.error(f"Error during NUMBA EMA Crossover backtest: {e}", exc_info=True)
+            return models.BacktestResult(error_message=f"Error in Numba EMA Crossover execution: {str(e)}")
+    else:
+        # --- Existing Python-based strategy execution path ---
+        logger.info(f"Using PYTHON path for single backtest of strategy: {strategy_class.strategy_id}")
+        # ... (the rest of your existing Python backtesting logic starting from PortfolioState init)
+        # Ensure this part uses the `df` created at the beginning of this function.
+        try:
+            portfolio_state = PortfolioState(initial_capital=initial_capital)
+        except Exception as e: # Should not happen if initial_capital is float
+            logger.error(f"Error initializing PortfolioState for Python backtest: {e}", exc_info=True)
+            return models.BacktestResult(error_message=f"Error initializing portfolio state: {str(e)}")
 
-    # --- Extract and Format Results ---
-    # Trades from portfolio are List[models.Trade]
-    portfolio_trades: List[ModelTrade] = strategy_instance.portfolio.trades
-    
-    # Convert portfolio trades (ModelTrade) to TradeEntry for BacktestResult
-    formatted_trades: List[TradeEntry] = []
-    for t in portfolio_trades:
-        formatted_trades.append(TradeEntry(
-            entry_time=t.entry_time,
-            exit_time=t.exit_time,
-            trade_type=t.trade_type, # e.g., "LONG", "SHORT"
-            quantity=t.qty, # Assuming models.Trade has 'qty'
-            entry_price=t.entry_price,
-            exit_price=t.exit_price,
-            pnl=t.pnl
-        ))
+        try:
+            strategy_instance = strategy_class(
+                shared_ohlc_data=df.copy(), # Pass the cleaned and indexed df
+                params=strategy_parameters,
+                portfolio=portfolio_state
+            )
+        except Exception as e:
+            logger.error(f"Error initializing strategy '{strategy_class.get_info().name}' for Python backtest: {e}", exc_info=True)
+            return models.BacktestResult(error_message=f"Error initializing strategy '{strategy_class.get_info().name}': {str(e)}")
 
-    # Equity Curve from portfolio is List[Dict[str, Any]] with "time" and "equity"
-    equity_curve_from_portfolio = strategy_instance.portfolio.equity_curve
-    equity_curve_points: List[EquityDrawdownPoint] = [
-        EquityDrawdownPoint(time=eq_point["time"], value=eq_point["equity"])
-        for eq_point in equity_curve_from_portfolio
-    ]
+        if df.empty : # Should have been caught earlier
+             return models.BacktestResult(error_message="No data to process for Python backtest.")
+        try:
+            strategy_instance.portfolio.record_equity(df.index[0], df['close'].iloc[0])
+        except IndexError:
+            logger.error("Python backtest: DataFrame is empty, cannot record initial equity.")
+            return models.BacktestResult(error_message="Cannot record initial equity for Python backtest, data empty.")
 
-    # Drawdown Curve Calculation
-    drawdown_curve_points: List[EquityDrawdownPoint] = []
-    peak_for_drawdown = initial_capital
-    if equity_curve_points:
-        peak_for_drawdown = equity_curve_points[0].value # Initialize with first equity value
-        for eq_point in equity_curve_points:
-            if eq_point.value > peak_for_drawdown:
-                peak_for_drawdown = eq_point.value
-            drawdown_value = peak_for_drawdown - eq_point.value
-            drawdown_percentage = (drawdown_value / peak_for_drawdown) * 100 if peak_for_drawdown > 0 else 0
-            drawdown_curve_points.append(EquityDrawdownPoint(time=eq_point.time, value=drawdown_percentage))
-    else: # Handle empty equity curve (e.g., no bars processed)
-        # Add a single point for consistency if needed by frontend, or leave empty
-        # For now, let's match previous behavior of adding a point if empty
-        drawdown_curve_points.append(EquityDrawdownPoint(time=datetime.now(), value=0))
+        for bar_idx in range(len(df)):
+            try:
+                strategy_instance.process_bar(bar_idx)
+                current_bar_timestamp = df.index[bar_idx]
+                current_bar_close = df['close'].iloc[bar_idx]
+                strategy_instance.portfolio.record_equity(current_bar_timestamp, current_bar_close)
+            except Exception as e:
+                logger.error(f"Error during Python simulation at bar {bar_idx} ({df.index[bar_idx]}): {e}", exc_info=True)
+                return models.BacktestResult(error_message=f"Error during Python simulation at bar {bar_idx} ({df.index[bar_idx]}): {str(e)}")
+        
+        # --- Extract and Format Results for Python Path (existing logic) ---
+        # (This part of your function remains the same, make sure it uses the correct df and portfolio_state)
+        portfolio_trades: List[ModelTrade] = strategy_instance.portfolio.trades
+        formatted_trades: List[models.TradeEntry] = []
+        for t in portfolio_trades:
+            formatted_trades.append(models.TradeEntry(
+                entry_time=t.entry_time, exit_time=t.exit_time, trade_type=t.trade_type,
+                quantity=t.qty, entry_price=t.entry_price, exit_price=t.exit_price, pnl=t.pnl
+            ))
+
+        equity_curve_from_portfolio = strategy_instance.portfolio.equity_curve
+        equity_curve_points: List[models.EquityDrawdownPoint] = [
+            models.EquityDrawdownPoint(time=eq_point["time"], value=eq_point["equity"])
+            for eq_point in equity_curve_from_portfolio
+        ]
+        # ... (rest of your existing Python path result formatting and metric calculation) ...
+        # Ensure it culminates in returning a models.BacktestResult
+        final_equity_py = equity_curve_points[-1].value if equity_curve_points else initial_capital
+        net_pnl_py = final_equity_py - initial_capital
+        net_pnl_pct_py = (net_pnl_py / initial_capital) * 100 if initial_capital != 0 else 0
+        total_closed_trades_py = len([t for t in formatted_trades if t.exit_time is not None])
+        winning_trades_count_py = len([t for t in formatted_trades if t.pnl is not None and t.pnl > 0])
+        losing_trades_count_py = len([t for t in formatted_trades if t.pnl is not None and t.pnl < 0])
+        win_rate_py = (winning_trades_count_py / total_closed_trades_py) * 100 if total_closed_trades_py > 0 else 0
+        
+        drawdown_curve_points_py: List[models.EquityDrawdownPoint] = [] # Recalculate for Python path
+        peak_for_drawdown_py = initial_capital
+        if equity_curve_points:
+            peak_for_drawdown_py = equity_curve_points[0].value
+            for eq_point in equity_curve_points:
+                if eq_point.value > peak_for_drawdown_py: peak_for_drawdown_py = eq_point.value
+                drawdown_value = peak_for_drawdown_py - eq_point.value
+                drawdown_percentage = (drawdown_value / peak_for_drawdown_py) * 100 if peak_for_drawdown_py > 0 else 0
+                drawdown_curve_points_py.append(models.EquityDrawdownPoint(time=eq_point.time, value=drawdown_percentage))
+        else:
+             if len(df.index) > 0: drawdown_curve_points_py.append(models.EquityDrawdownPoint(time=df.index[0].to_pydatetime(), value=0))
+             else: drawdown_curve_points_py.append(models.EquityDrawdownPoint(time=datetime.now(timezone.utc), value=0))
 
 
-    # --- Calculate Performance Metrics ---
-    final_equity = equity_curve_points[-1].value if equity_curve_points else initial_capital
-    net_pnl = final_equity - initial_capital
-    net_pnl_pct = (net_pnl / initial_capital) * 100 if initial_capital != 0 else 0
-    
-    total_closed_trades = len([t for t in formatted_trades if t.exit_time is not None])
-    winning_trades_count = len([t for t in formatted_trades if t.pnl is not None and t.pnl > 0])
-    losing_trades_count = len([t for t in formatted_trades if t.pnl is not None and t.pnl < 0]) # explicit <0 for loss
-    
-    win_rate = (winning_trades_count / total_closed_trades) * 100 if total_closed_trades > 0 else 0
-    
-    max_drawdown_percentage = max(d.value for d in drawdown_curve_points) if drawdown_curve_points else 0
+        max_drawdown_percentage_py = max(d.value for d in drawdown_curve_points_py) if drawdown_curve_points_py else 0
 
-    # TODO: Implement more detailed metrics (Profit Factor, Sharpe, etc.)
-    # For Profit Factor: sum_profits / abs(sum_losses)
-    # For Avg Profit/Loss: sum_profits / winning_trades_count, etc.
+        performance_metrics_py = models.BacktestPerformanceMetrics(
+            net_pnl=round(net_pnl_py, 2), net_pnl_pct=round(net_pnl_pct_py, 2),
+            total_trades=total_closed_trades_py, winning_trades=winning_trades_count_py,
+            losing_trades=losing_trades_count_py, win_rate=round(win_rate_py, 2),
+            loss_rate=round(((losing_trades_count_py / total_closed_trades_py) * 100 if total_closed_trades_py > 0 else 0), 2),
+            max_drawdown=round(max_drawdown_percentage_py, 2), 
+            max_drawdown_pct=round(max_drawdown_percentage_py, 2)
+        )
+        summary_msg_py = f"Python Backtest completed. Net PnL: {performance_metrics_py.net_pnl:.2f} ({performance_metrics_py.net_pnl_pct:.2f}%). Trades: {performance_metrics_py.total_trades}."
+        
+        return models.BacktestResult(
+            performance_metrics=performance_metrics_py,
+            trades=formatted_trades,
+            equity_curve=equity_curve_points,
+            drawdown_curve=drawdown_curve_points_py,
+            summary_message=summary_msg_py
+        )
 
-    performance_metrics = BacktestPerformanceMetrics(
-        net_pnl=round(net_pnl, 2),
-        net_pnl_pct=round(net_pnl_pct, 2),
-        total_trades=total_closed_trades,
-        winning_trades=winning_trades_count,
-        losing_trades=losing_trades_count, # Corrected this
-        win_rate=round(win_rate, 2),
-        loss_rate=round(((losing_trades_count / total_closed_trades) * 100 if total_closed_trades > 0 else 0), 2),
-        max_drawdown=round(max_drawdown_percentage, 2), # Storing max_drawdown_pct
-        max_drawdown_pct=round(max_drawdown_percentage, 2),
-        average_profit_per_trade=None, # Placeholder
-        average_loss_per_trade=None,   # Placeholder
-        average_trade_pnl= (net_pnl / total_closed_trades) if total_closed_trades > 0 else None, # Placeholder
-        profit_factor=None,            # Placeholder
-        sharpe_ratio=None,             # Placeholder
-        sortino_ratio=None,            # Placeholder
-        total_fees=0.0                 # Placeholder
-    )
-
-    summary_msg = f"Backtest completed. Net PnL: {performance_metrics.net_pnl:.2f} ({performance_metrics.net_pnl_pct:.2f}%). Trades: {performance_metrics.total_trades}."
-
-    return BacktestResult(
-        performance_metrics=performance_metrics,
-        trades=formatted_trades,
-        equity_curve=equity_curve_points,
-        drawdown_curve=drawdown_curve_points,
-        summary_message=summary_msg
-    )
+# Ensure POSITION_LONG and POSITION_SHORT are defined if not imported from numba_kernels,
+# or pass string types from Numba and handle them. For _transform_numba_output_to_backtest_result:
+POSITION_LONG = 1 # From numba_kernels
+POSITION_SHORT = -1 # From numba_kernels
+# --- END OF perform_backtest_simulation MODIFICATION ---
 
 def calculate_performance_metrics(
     portfolio: PortfolioState,
@@ -374,3 +417,122 @@ async def generate_chart_data(
         chart_header_info=chart_header,
         timeframe_actual=chart_request.timeframe
     )
+
+# --- NEW FUNCTION: Transform Numba output to BacktestResult ---
+def _transform_numba_output_to_backtest_result(
+    numba_raw_outputs: tuple,
+    ohlc_timestamps: pd.DatetimeIndex, # Timestamps for mapping bar indices
+    initial_capital: float,
+    strategy_params_used: Dict[str, Any] # For logging/reference
+) -> models.BacktestResult:
+    """
+    Transforms the raw output arrays from a single Numba backtest run
+    into a models.BacktestResult object.
+    """
+    try:
+        # Unpack the 15-element tuple from Numba
+        (
+            final_pnl_arr, total_trades_arr, winning_trades_arr,
+            losing_trades_arr, max_drawdown_arr,
+            equity_curve_values, fast_ema_series, slow_ema_series,
+            trade_entry_indices, trade_exit_indices,
+            trade_entry_prices, trade_exit_prices,
+            trade_types, trade_pnls,
+            actual_trade_count_arr # This is an array with one element: the count
+        ) = numba_raw_outputs
+
+        actual_trade_count = int(actual_trade_count_arr[0])
+
+        # --- Performance Metrics ---
+        net_pnl = float(final_pnl_arr[0]) # Result for the first (and only) combination
+        net_pnl_pct = (net_pnl / initial_capital) * 100 if initial_capital != 0 else 0
+        total_trades = int(total_trades_arr[0])
+        winning_trades = int(winning_trades_arr[0])
+        losing_trades = int(losing_trades_arr[0])
+        win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0
+        max_drawdown_pct = float(max_drawdown_arr[0]) * 100 # Numba returns decimal
+
+        performance_metrics = models.BacktestPerformanceMetrics(
+            net_pnl=round(net_pnl, 2),
+            net_pnl_pct=round(net_pnl_pct, 2),
+            total_trades=total_trades,
+            winning_trades=winning_trades,
+            losing_trades=losing_trades,
+            win_rate=round(win_rate, 2),
+            loss_rate=round(((losing_trades / total_trades) * 100 if total_trades > 0 else 0), 2),
+            max_drawdown=round(max_drawdown_pct, 2), # Storing as percentage
+            max_drawdown_pct=round(max_drawdown_pct, 2),
+            # Add other metrics if Numba kernel is enhanced further
+        )
+
+        # --- Trades List ---
+        trades_list: List[models.TradeEntry] = []
+        for i in range(actual_trade_count):
+            entry_idx = int(trade_entry_indices[i])
+            exit_idx = int(trade_exit_indices[i])
+
+            entry_time_dt = ohlc_timestamps[entry_idx].to_pydatetime()
+            # Numba uses -1 for not exited yet, or np.nan for price/pnl if still open
+            # We ensured open trades at end are "closed" against last bar in Numba for PNL calc
+            exit_time_dt = ohlc_timestamps[exit_idx].to_pydatetime() if exit_idx != -1 and exit_idx < len(ohlc_timestamps) else None
+            
+            exit_price_val = float(trade_exit_prices[i]) if not np.isnan(trade_exit_prices[i]) else None
+            pnl_val = float(trade_pnls[i]) if not np.isnan(trade_pnls[i]) else None
+            
+            trade_type_str = "LONG" if trade_types[i] == POSITION_LONG else "SHORT" # POSITION_LONG/SHORT are from numba_kernels
+
+            trades_list.append(models.TradeEntry(
+                entry_time=entry_time_dt,
+                exit_time=exit_time_dt,
+                trade_type=trade_type_str, # This needs to match TradeEntry model ("LONG", "SHORT")
+                quantity=1, # Assuming quantity is 1 for now, Numba kernel uses this implicitly
+                entry_price=float(trade_entry_prices[i]),
+                exit_price=exit_price_val,
+                pnl=pnl_val
+            ))
+            
+        # --- Equity Curve ---
+        equity_curve_points: List[models.EquityDrawdownPoint] = []
+        if equity_curve_values.size > 0 and equity_curve_values.size == len(ohlc_timestamps):
+            for i in range(len(ohlc_timestamps)):
+                equity_curve_points.append(models.EquityDrawdownPoint(
+                    time=ohlc_timestamps[i].to_pydatetime(),
+                    value=round(float(equity_curve_values[i]), 2)
+                ))
+        elif equity_curve_values.size > 0 : # Mismatch in size, log warning
+             logger.warning(f"Numba equity curve size ({equity_curve_values.size}) mismatch with ohlc_timestamps ({len(ohlc_timestamps)}). Skipping equity curve.")
+
+
+        # --- Drawdown Curve (calculated from equity curve) ---
+        drawdown_curve_points: List[models.EquityDrawdownPoint] = []
+        current_peak_equity = initial_capital
+        if equity_curve_points:
+            current_peak_equity = equity_curve_points[0].value
+            for eq_point in equity_curve_points:
+                if eq_point.value > current_peak_equity:
+                    current_peak_equity = eq_point.value
+                drawdown_val = current_peak_equity - eq_point.value
+                drawdown_pct = (drawdown_val / current_peak_equity) * 100 if current_peak_equity > 0 else 0
+                drawdown_curve_points.append(models.EquityDrawdownPoint(
+                    time=eq_point.time,
+                    value=round(drawdown_pct, 2)
+                ))
+        else: # Handle case where equity curve might be empty
+            if len(ohlc_timestamps) > 0: # Add a single point if we have timestamps
+                 drawdown_curve_points.append(models.EquityDrawdownPoint(time=ohlc_timestamps[0].to_pydatetime(), value=0))
+            else: # Truly no data
+                 drawdown_curve_points.append(models.EquityDrawdownPoint(time=datetime.now(timezone.utc), value=0))
+
+
+        summary_msg = f"Numba Backtest completed. Net PnL: {performance_metrics.net_pnl:.2f} ({performance_metrics.net_pnl_pct:.2f}%). Trades: {performance_metrics.total_trades}."
+
+        return models.BacktestResult(
+            performance_metrics=performance_metrics,
+            trades=trades_list,
+            equity_curve=equity_curve_points,
+            drawdown_curve=drawdown_curve_points,
+            summary_message=summary_msg
+        )
+    except Exception as e:
+        logger.error(f"Error transforming Numba output: {e}", exc_info=True)
+        return models.BacktestResult(error_message=f"Error processing Numba results: {str(e)}")
