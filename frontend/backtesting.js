@@ -1,20 +1,18 @@
 // backtesting.js
 
-let currentBacktestSettings = {
+let currentBacktestSettings = { 
     exchange: 'NSE', token: '3456', symbol: 'TATAMOTORS', timeframe: '1min',
     strategyId: 'ema_crossover', initialCapital: 100000,
     startDate: '', endDate: '', strategyParams: {}
 };
 let backtestChartEquity = null, backtestChartDrawdown = null;
 let backtestEquitySeries = null, backtestDrawdownSeries = null;
-let backtestCandlestickChart = null; // For the new main chart
 
 let backtestExchangeSelect, backtestSymbolSelect, backtestTimeframeSelect,
     backtestStrategySelect, backtestInitialCapitalInput, backtestStartDateInput,
     backtestEndDateInput, backtestStrategyParamsContainer, runBacktestButton,
     backtestResultsContainer, performanceSummaryContainer, tradesTableBody,
-    equityCurveChartContainer, drawdownChartContainer,
-    backtestCandlestickChartContainer; // HTML element for the new main chart
+    equityCurveChartContainer, drawdownChartContainer;
 
 async function initBacktestingPage() {
     console.log("Initializing Backtesting Page...");
@@ -32,18 +30,19 @@ async function initBacktestingPage() {
     tradesTableBody = document.getElementById('tradesTableBody');
     equityCurveChartContainer = document.getElementById('equityCurveChartContainer');
     drawdownChartContainer = document.getElementById('drawdownChartContainer');
-    // Assuming you will add a div with this ID in your backtesting.html
-    backtestCandlestickChartContainer = document.getElementById('backtestCandlestickChartContainer');
 
-
+    // Ensure critical values in currentBacktestSettings have defaults or correct types,
+    // especially if populated from another page like the dashboard.
     currentBacktestSettings.exchange = currentBacktestSettings.exchange || 'NSE';
-    currentBacktestSettings.token = currentBacktestSettings.token || '3456';
+    // Ensure token and symbol have fallbacks, potentially based on availableSymbols if loaded prior or use hardcoded defaults
+    currentBacktestSettings.token = currentBacktestSettings.token || '3456'; 
     currentBacktestSettings.symbol = currentBacktestSettings.symbol || 'TATAMOTORS';
     currentBacktestSettings.timeframe = currentBacktestSettings.timeframe || '1min';
-    currentBacktestSettings.strategyId = currentBacktestSettings.strategyId || 'ema_crossover';
+    // Ensure strategyId has a fallback, potentially based on availableStrategies if loaded prior
+    currentBacktestSettings.strategyId = currentBacktestSettings.strategyId || 'ema_crossover'; 
     currentBacktestSettings.initialCapital = currentBacktestSettings.initialCapital !== undefined ? parseFloat(currentBacktestSettings.initialCapital) : 100000;
-    if (isNaN(currentBacktestSettings.initialCapital) || currentBacktestSettings.initialCapital <= 0) {
-        currentBacktestSettings.initialCapital = 100000;
+    if (isNaN(currentBacktestSettings.initialCapital) || currentBacktestSettings.initialCapital <= 0) { // Also check for valid positive number
+        currentBacktestSettings.initialCapital = 100000; // Default if invalid
     }
     currentBacktestSettings.strategyParams = currentBacktestSettings.strategyParams || {};
 
@@ -62,10 +61,11 @@ async function initBacktestingPage() {
             const strategiesData = await getAvailableStrategies();
             if (strategiesData && strategiesData.strategies) {
                 availableStrategies = strategiesData.strategies;
+                // If strategyId was a fallback and now we have strategies, ensure it's valid or pick first
                 if (availableStrategies.length > 0 && !availableStrategies.find(s => s.id === currentBacktestSettings.strategyId)) {
                     currentBacktestSettings.strategyId = availableStrategies[0].id;
                 } else if (availableStrategies.length === 0) {
-                     currentBacktestSettings.strategyId = '';
+                     currentBacktestSettings.strategyId = ''; // No strategies available
                 }
             }
         }
@@ -74,29 +74,15 @@ async function initBacktestingPage() {
         const exchanges = [{ id: 'NSE', name: 'NSE' }, { id: 'BSE', name: 'BSE' }, { id: 'NFO', name: 'NFO' }, { id: 'MCX', name: 'MCX' }];
         populateSelect(backtestExchangeSelect, exchanges, 'id', 'name', currentBacktestSettings.exchange);
 
-        await loadBacktestSymbols(currentBacktestSettings.exchange, currentBacktestSettings.token);
-
+        // It's better to set token after symbols are loaded if it's a generic default
+        await loadBacktestSymbols(currentBacktestSettings.exchange, currentBacktestSettings.token); 
+        
         updateBacktestStrategyParamsUI();
 
         backtestTimeframeSelect.value = currentBacktestSettings.timeframe;
-        backtestInitialCapitalInput.value = currentBacktestSettings.initialCapital;
+        backtestInitialCapitalInput.value = currentBacktestSettings.initialCapital; // This should now be safe
         if(currentBacktestSettings.startDate) backtestStartDateInput.value = currentBacktestSettings.startDate;
         if(currentBacktestSettings.endDate) backtestEndDateInput.value = currentBacktestSettings.endDate;
-
-        // Initialize the new candlestick chart area (optional, could also be done in executeBacktest)
-        if (backtestCandlestickChartContainer) {
-            backtestCandlestickChartContainer.innerHTML = '<p class="text-center p-4 text-gray-400">Run a backtest to see the chart with strategy.</p>';
-             // If you have a common chart initialization utility like in dashboard.js:
-            // window.backtestMainChart = initChart('backtestCandlestickChartContainer');
-            // new ResizeObserver(() => {
-            //     if (window.backtestMainChart && document.getElementById('backtestCandlestickChartContainer')) {
-            //         resizeChart(window.backtestMainChart, 'backtestCandlestickChartContainer');
-            //     }
-            // }).observe(document.getElementById('backtestCandlestickChartContainer'));
-
-        }
-
-
     } catch (error) {
         console.error("Error initializing backtesting page:", error);
         showModal('Initialization Error', `Failed to initialize backtesting page: ${error.data?.message || error.message}`);
@@ -108,11 +94,11 @@ async function initBacktestingPage() {
 async function loadBacktestSymbols(exchange, defaultToken = '') {
     showLoading(true);
     try {
-        const data = await getSymbolsForExchange(exchange); // api.js
+        const data = await getSymbolsForExchange(exchange);
         const allSymbols = data.symbols || [];
         const filteredSymbols = allSymbols.filter(s => ['EQ', 'INDEX', 'FUTIDX', 'FUTSTK'].includes(s.instrument) || !s.instrument);
-        populateSelect(backtestSymbolSelect, filteredSymbols, 'token', 'trading_symbol', defaultToken || (filteredSymbols.length > 0 ? filteredSymbols[0].token : '')); // ui.js
-
+        populateSelect(backtestSymbolSelect, filteredSymbols, 'token', 'trading_symbol', defaultToken || (filteredSymbols.length > 0 ? filteredSymbols[0].token : ''));
+        
         if (backtestSymbolSelect.value) {
             currentBacktestSettings.token = backtestSymbolSelect.value;
         } else if (defaultToken) {
@@ -128,10 +114,10 @@ async function loadBacktestSymbols(exchange, defaultToken = '') {
         }
     } catch (error) {
         console.error(`Error fetching symbols for backtest ${exchange}:`, error);
-        showModal('Symbol Error', `Could not load symbols for backtest: ${error.data?.detail || error.message}`); // ui.js
+        showModal('Symbol Error', `Could not load symbols for backtest: ${error.data?.detail || error.message}`);
         backtestSymbolSelect.innerHTML = '<option value="">Error loading</option>';
     } finally {
-        showLoading(false); // ui.js
+        showLoading(false);
     }
 }
 
@@ -142,26 +128,24 @@ function handleBacktestExchangeChange() {
 
 function updateBacktestStrategyParamsUI() {
     currentBacktestSettings.strategyId = backtestStrategySelect.value;
+    // Corrected: Find strategy by 'id'
     const strategyConfig = availableStrategies.find(s => s.id === currentBacktestSettings.strategyId);
     if (strategyConfig && backtestStrategyParamsContainer) {
         const paramsToLoad = currentBacktestSettings.strategyParams && Object.keys(currentBacktestSettings.strategyParams).length > 0 &&
-                             currentBacktestSettings.strategyParams.constructor === Object
+                             currentBacktestSettings.strategyParams.constructor === Object // Ensure it's an object of params, not something else
                            ? currentBacktestSettings.strategyParams
                            : strategyConfig.parameters.reduce((acc, p) => { acc[p.name] = p.default_value; return acc; }, {});
-        createStrategyParamsInputs(backtestStrategyParamsContainer, strategyConfig.parameters, paramsToLoad, false); // ui.js
+        createStrategyParamsInputs(backtestStrategyParamsContainer, strategyConfig.parameters, paramsToLoad, false); // false for single value inputs
     } else if (backtestStrategyParamsContainer) {
         backtestStrategyParamsContainer.innerHTML = '<p class="text-sm text-gray-400">Select a strategy.</p>';
     }
 }
 
 async function executeBacktest() {
-    showLoading(true); // ui.js
+    showLoading(true);
     backtestResultsContainer.classList.add('hidden');
-    if (backtestCandlestickChartContainer) {
-         backtestCandlestickChartContainer.innerHTML = '<p class="text-center p-4 text-gray-400">Loading chart data...</p>';
-    }
 
-
+    // ... (parameter collection logic remains the same) ...
     currentBacktestSettings.exchange = backtestExchangeSelect.value;
     currentBacktestSettings.token = backtestSymbolSelect.value;
     const selectedSymbolText = backtestSymbolSelect.options[backtestSymbolSelect.selectedIndex]?.text;
@@ -174,258 +158,92 @@ async function executeBacktest() {
     currentBacktestSettings.endDate = backtestEndDateInput.value;
 
     const strategyConfig = availableStrategies.find(s => s.id === currentBacktestSettings.strategyId);
-    if (!strategyConfig) {
-        showModal('Error', 'Strategy configuration not found.'); // ui.js
-        showLoading(false); // ui.js
+    if (strategyConfig) {
+        currentBacktestSettings.strategyParams = getStrategyParamsValues(strategyConfig.parameters, false);
+    } else {
+        currentBacktestSettings.strategyParams = {};
+        showModal('Error', 'Strategy configuration not found.');
+        showLoading(false);
         return;
     }
-    currentBacktestSettings.strategyParams = getStrategyParamsValues(strategyConfig.parameters, false); // ui.js
 
-
-    const paramRanges = [];
-    if (strategyConfig.parameters && currentBacktestSettings.strategyParams) {
-        for (const paramDef of strategyConfig.parameters) {
-            const paramName = paramDef.name;
-            if (Object.hasOwnProperty.call(currentBacktestSettings.strategyParams, paramName)) {
-                let paramValue = currentBacktestSettings.strategyParams[paramName];
-                let stepValue = 1;
-
-                if (paramDef.type === 'float') {
-                    paramValue = parseFloat(paramValue);
-                    stepValue = parseFloat(paramDef.step || 0.01);
-                } else if (paramDef.type === 'integer' || paramDef.type === 'int') {
-                    paramValue = parseInt(paramValue);
-                    stepValue = parseInt(paramDef.step || 1);
-                }
-                stepValue = Math.max(stepValue, (paramDef.type === 'float') ? 0.000001 : 1);
-
-                if (paramDef.type === 'integer' || paramDef.type === 'int' || paramDef.type === 'float') {
-                    paramRanges.push({
-                        name: paramName,
-                        start_value: paramValue,
-                        end_value: paramValue,
-                        step: stepValue
-                    });
-                }
-            }
-        }
-    }
-    
-    let apiTimeframe = currentBacktestSettings.timeframe;
-    if (apiTimeframe === 'day') apiTimeframe = 'D';
-
-    const optimizationRequest = {
+    const requestBody = {
         strategy_id: currentBacktestSettings.strategyId,
         exchange: currentBacktestSettings.exchange,
         token: currentBacktestSettings.token,
         start_date: currentBacktestSettings.startDate,
         end_date: currentBacktestSettings.endDate,
-        timeframe: apiTimeframe,
+        timeframe: currentBacktestSettings.timeframe,
         initial_capital: currentBacktestSettings.initialCapital,
-        parameter_ranges: paramRanges,
-        metric_to_optimize: 'net_pnl'
+        parameters: currentBacktestSettings.strategyParams
     };
 
     try {
-        console.log("Starting backtest (via optimization):", optimizationRequest);
-        const optJob = await startOptimization(optimizationRequest); // api.js
+        const results = await runBacktest(requestBody);
+        console.log("Backtest Results:", results);
 
-        if (!optJob || !optJob.job_id || optJob.status === "FAILED") {
-            const errorMsg = optJob?.data?.detail || optJob?.data?.message || optJob?.message || 'Unknown error starting job.';
-            showModal('Backtest Error', `Failed to start backtest job: ${errorMsg}`); // ui.js
-            showLoading(false); // ui.js
-            return;
-        }
-        console.log("Backtest job started/queued:", optJob);
+        // MODIFIED CONDITION:
+        // Check if the results object exists.
+        // Then, determine the source of metrics: results.performance_metrics (if it's an object) or results directly.
+        // Display results if metricsSource is truthy and contains keys, or if a key like net_pnl is a number.
+        if (results) {
+            const metricsSource = results.performance_metrics || results; // Prefer performance_metrics if it exists as an object
 
-        let jobStatus = await getOptimizationStatus(optJob.job_id); // api.js
-        let attempts = 0;
-        const maxAttempts = 90;
-        console.log(`Polling for job ${optJob.job_id} completion (max ${maxAttempts} attempts).`);
+            // Ensure metricsSource is an object and has some data to display or specific essential metrics like net_pnl are numbers.
+            const hasMeaningfulMetrics = metricsSource && typeof metricsSource === 'object' &&
+                                        (Object.keys(metricsSource).length > 0 || typeof metricsSource.net_pnl === 'number');
 
-        while (jobStatus && (jobStatus.status === 'QUEUED' || jobStatus.status === 'RUNNING') && attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            jobStatus = await getOptimizationStatus(optJob.job_id); // api.js
-            attempts++;
-            console.log(`Backtest job ${optJob.job_id} status: ${jobStatus?.status}, attempt: ${attempts}/${maxAttempts}`);
-        }
+            if (hasMeaningfulMetrics) {
+                displayPerformanceSummary(performanceSummaryContainer, metricsSource);
+                populateTradesTable(tradesTableBody, results.trades || []); // Ensure trades is an array
 
-        if (!jobStatus || jobStatus.status !== 'COMPLETED') {
-            const errorMsg = jobStatus?.data?.message || jobStatus?.message || 'Job did not complete or status unknown.';
-            showModal('Backtest Error', `Backtest job did not complete successfully. Status: ${jobStatus?.status || 'Unknown'}. Message: ${errorMsg}`); // ui.js
-            if (jobStatus?.status === 'FAILED' && jobStatus?.result?.error) {
-                 console.error("Optimization job failed with error:", jobStatus.result.error);
-                 showModal('Backtest Error', `Backtest job failed: ${jobStatus.result.error}`); // ui.js
-            }
-            showLoading(false); // ui.js
-            return;
-        }
+                // Equity Curve
+                if (results.equity_curve && results.equity_curve.length > 0) {
+                    if (backtestChartEquity) { try {backtestChartEquity.remove();} catch(e){console.warn("Error removing old equity chart",e);} backtestChartEquity = null; }
+                    const { chart, series } = initSimpleLineChart('equityCurveChartContainer', '#4caf50');
+                    backtestChartEquity = chart; backtestEquitySeries = series;
+                    const equityDataForChart = results.equity_curve.map(d => ({ time: d.time, value: d.equity }));
+                    setSimpleLineChartData(backtestEquitySeries, equityDataForChart);
+                    if(backtestChartEquity) backtestChartEquity.timeScale().fitContent();
+                } else {
+                    equityCurveChartContainer.innerHTML = '<p class="text-center p-4">No equity data available for this backtest.</p>';
+                }
 
-        console.log(`Backtest job ${optJob.job_id} COMPLETED. Fetching results.`);
-        const optResults = await getOptimizationResults(optJob.job_id); // api.js
-        console.log("Backtest (Optimization) Results:", optResults);
-
-        if (optResults && optResults.best_result) {
-            const bestResult = optResults.best_result;
-            const performanceMetrics = bestResult.performance_metrics;
-            const actualParametersRun = bestResult.parameters;
-
-            if (performanceMetrics && typeof performanceMetrics === 'object') {
-                displayPerformanceSummary(performanceSummaryContainer, performanceMetrics); // ui.js
+                // Drawdown Curve
+                if (results.drawdown_curve && results.drawdown_curve.length > 0) {
+                     if (backtestChartDrawdown) { try {backtestChartDrawdown.remove();} catch(e){console.warn("Error removing old drawdown chart", e);} backtestChartDrawdown = null; }
+                    const { chart, series } = initSimpleLineChart('drawdownChartContainer', '#f44336');
+                    backtestChartDrawdown = chart; backtestDrawdownSeries = series;
+                    const drawdownDataForChart = results.drawdown_curve.map(d => ({ time: d.time, value: d.value }));
+                    setSimpleLineChartData(backtestDrawdownSeries, drawdownDataForChart);
+                     if(backtestChartDrawdown) backtestChartDrawdown.timeScale().fitContent();
+                } else {
+                    drawdownChartContainer.innerHTML = '<p class="text-center p-4">No drawdown data available for this backtest.</p>';
+                }
                 backtestResultsContainer.classList.remove('hidden');
             } else {
-                performanceSummaryContainer.innerHTML = `<p class="text-center p-4 text-gray-400">Performance metrics not available.</p>`;
+                // This case means results object was there, but metrics were not in the expected place or were empty/null.
+                // Still attempt to show basic info and trades.
+                performanceSummaryContainer.innerHTML = `<p class="text-center p-4 text-gray-400">Backtest completed. PnL: ${results.net_pnl !== undefined ? results.net_pnl.toFixed(2) : 'N/A'}. Other performance metrics may be minimal.</p>`;
+                if (results.trades && results.trades.length > 0) {
+                    populateTradesTable(tradesTableBody, results.trades);
+                } else {
+                    tradesTableBody.innerHTML = '<tr><td colspan="7" class="text-center py-4">No trades executed in this backtest.</td></tr>';
+                }
+                 // Optionally show equity/drawdown if they exist even with minimal metrics
+                if (results.equity_curve && results.equity_curve.length > 0) { /* ... existing logic ... */ } else { equityCurveChartContainer.innerHTML = '<p class="text-center p-4">No equity data available for this backtest.</p>';}
+                if (results.drawdown_curve && results.drawdown_curve.length > 0) { /* ... existing logic ... */ } else { drawdownChartContainer.innerHTML = '<p class="text-center p-4">No drawdown data available for this backtest.</p>';}
+                backtestResultsContainer.classList.remove('hidden'); // Show parts of results container
+                showModal('Backtest Info', `Backtest completed. Performance metrics might be minimal (e.g., PnL: ${results.net_pnl !== undefined ? results.net_pnl.toFixed(2) : 'N/A'}). ${results.summary_message || results.message || ''}`);
             }
-            
-            // Trades table - use bestResult.trades if available, otherwise show message
-            // Based on logs, bestResult.trades might be undefined.
-            if (bestResult.trades && Array.isArray(bestResult.trades)) {
-                populateTradesTable(tradesTableBody, bestResult.trades); // ui.js
-            } else {
-                 tradesTableBody.innerHTML = '<tr><td colspan="7" class="text-center py-4">Detailed trade data not available from this backtest method. See trade markers on chart.</td></tr>';
-            }
-
-            // Equity and Drawdown Curves - Data not available from current optResults structure based on logs
-            equityCurveChartContainer.innerHTML = '<p class="text-center p-4">Equity curve data not available with this backtest method.</p>';
-            if (backtestChartEquity) { try {backtestChartEquity.remove();} catch(e){} backtestChartEquity = null; }
-
-            drawdownChartContainer.innerHTML = '<p class="text-center p-4">Drawdown curve data not available with this backtest method.</p>';
-            if (backtestChartDrawdown) { try {backtestChartDrawdown.remove();} catch(e){} backtestChartDrawdown = null; }
-            
-            // Now, fetch and display the main chart with strategy applied
-            await displayMainBacktestChart(currentBacktestSettings, actualParametersRun, optJob.job_id);
-
         } else {
-            const errorMsg = optResults?.data?.detail || optResults?.data?.message || optResults?.message || 'Optimization results are missing the best_result field.';
-            showModal('Backtest Error', `Backtest completed but returned no parsable results or missing 'best_result'. ${errorMsg}`); // ui.js
-            equityCurveChartContainer.innerHTML = '<p class="text-center p-4">Error loading backtest results.</p>';
-            drawdownChartContainer.innerHTML = '<p class="text-center p-4">Error loading backtest results.</p>';
-            if (backtestCandlestickChartContainer) {
-                backtestCandlestickChartContainer.innerHTML = '<p class="text-center p-4 text-red-500">Error loading chart data due to backtest result issue.</p>';
-            }
+            // This case means the results object itself was null/undefined from API, or structure is unexpected
+            showModal('Backtest Error', `Backtest completed but returned no parsable results object. ${results?.summary_message || results?.message || ''}`);
         }
     } catch (error) {
-        console.error("Error running backtest (via optimization):", error);
-        const errorMsg = error.data?.detail || error.data?.message || error.message || 'An unknown error occurred.';
-        showModal('Backtest Execution Error', `Failed to run backtest: ${errorMsg}`); // ui.js
+        console.error("Error running backtest:", error);
+        showModal('Backtest Execution Error', `Failed to run backtest: ${error.data?.detail || error.data?.message || error.message}`);
     } finally {
-        showLoading(false); // ui.js
+        showLoading(false);
     }
-}
-
-async function displayMainBacktestChart(settings, strategyParamsForChart, jobId) {
-    if (!backtestCandlestickChartContainer) {
-        console.warn("Main backtest chart container (backtestCandlestickChartContainer) not found.");
-        return;
-    }
-    showLoading(true); // ui.js
-    backtestCandlestickChartContainer.innerHTML = `<p class="text-center p-4">Loading chart for backtest job ${jobId}...</p>`;
-
-    try {
-        let apiTimeframe = settings.timeframe;
-        if (apiTimeframe === 'day') apiTimeframe = 'D';
-
-        const chartRequest = {
-            exchange: settings.exchange,
-            token: settings.token,
-            timeframe: apiTimeframe,
-            strategy_id: settings.strategyId,
-            strategy_params: strategyParamsForChart || {}, // Use parameters from opt_results
-            start_date: settings.startDate,
-            end_date: settings.endDate
-        };
-        console.log("[backtesting.js] Requesting /chart_data_with_strategy with params:", chartRequest);
-
-        const chartData = await getChartData(chartRequest); // api.js
-        console.log("[backtesting.js] Received chart data:", chartData);
-
-        if (backtestCandlestickChart) {
-            try { backtestCandlestickChart.remove(); } catch(e) { console.warn("Error removing old candlestick chart", e); }
-            backtestCandlestickChart = null;
-        }
-        
-        // --- Chart Rendering Logic (Simplified - adapt from dashboard.js/chartSetup.js) ---
-        // You'll need to use functions like initChart, addOrUpdateCandlestickSeries, etc.
-        // from your chartSetup.js or ui.js, similar to how dashboard.js does it.
-        
-        // Ensure the container is clean for new chart
-        backtestCandlestickChartContainer.innerHTML = ''; 
-        // Initialize a new chart instance targeting 'backtestCandlestickChartContainer'
-        // This assumes 'initChart' is available and works like in dashboard.js
-        const chart = initChart('backtestCandlestickChartContainer');
-        if (!chart) {
-            backtestCandlestickChartContainer.innerHTML = '<p class="text-center p-4 text-red-500">Failed to initialize chart.</p>';
-            throw new Error("Failed to initialize chart instance for backtest display.");
-        }
-        backtestCandlestickChart = chart; // Store the new chart instance
-
-
-        if (chartData && chartData.ohlc_data && chartData.ohlc_data.length > 0) {
-            const ohlcForChart = chartData.ohlc_data.map(d => ({
-                time: formatTimeForLightweightCharts(d.time), // Ensure this helper is available
-                open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume
-            }));
-            
-            // Assumes addOrUpdateCandlestickSeries is available (from chartSetup.js or similar)
-            const candlestickSeries = addOrUpdateCandlestickSeries(backtestCandlestickChart, ohlcForChart, 'Backtest Series');
-            
-            if (chartData.indicator_data && Array.isArray(chartData.indicator_data) && chartData.indicator_data.length > 0) {
-                const indicatorColors = { fast_ema: 'rgba(0, 150, 136, 0.8)', slow_ema: 'rgba(255, 82, 82, 0.8)' }; // Example colors
-                const transformedIndicatorData = {};
-                chartData.indicator_data.forEach(indicatorSeries => {
-                    if (indicatorSeries.name && Array.isArray(indicatorSeries.data)) {
-                        let simpleKey = indicatorSeries.name.toLowerCase().replace(/\s*\(.*\)/, '').replace(/\s+/g, '_');
-                        transformedIndicatorData[simpleKey] = indicatorSeries.data.map(indPt => ({
-                            time: formatTimeForLightweightCharts(indPt.time),
-                            value: indPt.value
-                        }));
-                    }
-                });
-                 // Assumes addOrUpdateIndicatorSeries is available
-                addOrUpdateIndicatorSeries(backtestCandlestickChart, transformedIndicatorData, indicatorColors);
-            }
-
-            if (chartData.trade_markers && candlestickSeries && chartData.trade_markers.length > 0) {
-                 const markersForChart = chartData.trade_markers.map(m => ({
-                    ...m,
-                    time: formatTimeForLightweightCharts(m.time),
-                }));
-                // Assumes addTradeMarkers is available
-                addTradeMarkers(candlestickSeries, markersForChart);
-            }
-            // Assumes fitChartContent is available
-            fitChartContent(backtestCandlestickChart);
-            // Update a header if you have one for this chart
-            // document.getElementById('backtestChartHeader').textContent = `${chartData.chart_header_info || (settings.symbol + ' (' + settings.timeframe + ') - Backtest Visualization')}`;
-        } else {
-            backtestCandlestickChartContainer.innerHTML = `<p class="text-center p-4">No chart data (OHLC) available for ${settings.symbol}. ${chartData?.message || ''}</p>`;
-        }
-        // --- End Chart Rendering Logic ---
-
-    } catch (error) {
-        console.error("[backtesting.js] Error displaying main backtest chart:", error);
-        const errorMsg = error.data?.detail || error.data?.message || error.message || 'Unknown error loading chart.';
-        backtestCandlestickChartContainer.innerHTML = `<p class="text-center p-4 text-red-500">Failed to load chart: ${errorMsg}</p>`;
-    } finally {
-        showLoading(false); // ui.js
-    }
-}
-
-// Make sure formatTimeForLightweightCharts helper is available in this scope
-// (it's in dashboard.js, might need to be moved to a shared ui.js or duplicated)
-function formatTimeForLightweightCharts(timeValue) {
-    if (typeof timeValue === 'number') {
-        if (timeValue > 2000000000000) { // Heuristic for ms
-            return Math.floor(timeValue / 1000);
-        }
-        return timeValue;
-    }
-    if (typeof timeValue === 'string') {
-        const d = new Date(timeValue);
-        if (!isNaN(d.getTime())) {
-            return Math.floor(d.getTime() / 1000);
-        }
-    }
-     console.warn(`[formatTimeForLightweightCharts] Unexpected timeValue: ${timeValue}`);
-    return timeValue; // Fallback
 }

@@ -86,6 +86,15 @@ async function getChartData(requestBody) {
 }
 
 /**
+ * Runs a backtest.
+ * @param {object} requestBody - The request payload for /backtest/run.
+ * @returns {Promise<object>} API response.
+ */
+async function runBacktest(requestBody) {
+    return fetchData('/backtest/run', 'POST', requestBody);
+}
+
+/**
  * Starts an optimization job.
  * @param {object} requestBody - The request payload for /optimize/start.
  * @returns {Promise<object>} API response.

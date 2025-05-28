@@ -1,7 +1,7 @@
 // optimization.js
 
 let currentOptimizationSettings = {
-    exchange: 'NSE', token: '3456', symbol: 'TATAMOTORS', timeframe: '1min',
+    exchange: 'NSE', token: '3045', symbol: 'TATAMOTORS', timeframe: 'day',
     strategyId: 'ema_crossover', initialCapital: 100000,
     startDate: '', endDate: '', metricToOptimize: 'net_pnl', parameter_ranges: {}
 };

@@ -128,8 +128,8 @@
             <div class="text-white text-2xl font-bold">Trading Platform</div>
             <div class="space-x-2">
                 <button id="nav-dashboard" class="nav-link px-4 py-2 rounded-md text-sm font-medium">Dashboard</button>
-                <button id="goToBacktestButton" class="nav-link px-4 py-2 rounded-md text-sm font-medium">Backtesting</button>
-                <button id="goToOptimizeButton" class="nav-link px-4 py-2 rounded-md text-sm font-medium">Optimization</button>
+                <button id="nav-backtesting" class="nav-link px-4 py-2 rounded-md text-sm font-medium">Backtesting</button>
+                <button id="nav-optimization" class="nav-link px-4 py-2 rounded-md text-sm font-medium">Optimization</button>
             </div>
         </div>
     </nav>
@@ -213,6 +213,10 @@
                          <div id="chartContainer"></div>
                     </div>
 
+                    <div class="flex space-x-4 mt-6">
+                        <button id="goToBacktestButton" class="btn btn-secondary">Run Full Backtest</button>
+                        <button id="goToOptimizeButton" class="btn btn-secondary">Optimize Strategy</button>
+                    </div>
                 </div>
             `,
             backtesting: `
@@ -391,8 +395,8 @@
         // --- DOM Elements ---
         const mainContent = document.getElementById('main-content');
         const navDashboard = document.getElementById('nav-dashboard');
-        const navBacktesting = document.getElementById('goToBacktestButton');
-        const navOptimization = document.getElementById('goToOptimizeButton');
+        const navBacktesting = document.getElementById('nav-backtesting');
+        const navOptimization = document.getElementById('nav-optimization');
         const genericModal = document.getElementById('genericModal');
         const modalTitle = document.getElementById('modalTitle');
         const modalBody = document.getElementById('modalBody');
