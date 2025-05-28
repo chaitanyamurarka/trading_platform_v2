@@ -115,66 +115,6 @@ async def fetch_historical_data_api(request: models.HistoricalDataRequest):
         logger.error(f"Unexpected error in /data/historical endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected server error occurred: {str(e)}")
 
-
-@app.post("/backtest/run", response_model=models.BacktestResult, tags=["Backtesting"]) # Added tag
-async def run_backtest_api(request: models.BacktestRequest):
-    logger.info(f"Received backtest request for strategy_id: '{request.strategy_id}'")
-    strategy_class = STRATEGY_REGISTRY.get(request.strategy_id)
-    if not strategy_class:
-        logger.error(f"Strategy ID '{request.strategy_id}' not found. Available: {list(STRATEGY_REGISTRY.keys())}")
-        raise HTTPException(status_code=404, detail=f"Strategy ID '{request.strategy_id}' not found.")
-
-    # Prepare HistoricalDataRequest for data fetching
-    # The timeframe in BacktestRequest should match HistoricalDataRequest interval format
-    data_req = models.HistoricalDataRequest(
-        exchange=request.exchange, token=request.token,
-        start_time=request.start_date, end_time=request.end_date,
-        interval=request.timeframe # Ensure this timeframe is valid for data_module
-    )
-    try:
-        # Fetch data using data_module (which handles Shoonya interaction)
-        api_client = get_shoonya_api_client() # Ensures API client is ready
-        if not api_client:
-             raise ConnectionError("Shoonya API client not available for backtest data.")
-        historical_data_container = await data_module.fetch_and_store_historical_data(data_req) # This is HistoricalDataResponse
-        
-        if not historical_data_container.data:
-            logger.warning(f"No historical data for backtest: {data_req.model_dump_json()}. Message: {historical_data_container.message}")
-            # It's better to raise an error that translates to a 404 or 400 for the client
-            raise HTTPException(status_code=404, detail=f"No historical data found for the backtest parameters. {historical_data_container.message or ''}")
-        
-        ohlc_data_points_for_backtest = historical_data_container.data # List[OHLCDataPoint]
-        logger.info(f"Fetched {len(ohlc_data_points_for_backtest)} data points for backtest.")
-
-    except HTTPException: # Re-raise HTTPExceptions (like the 404 above)
-        raise
-    except ConnectionError as e:
-        logger.error(f"Connection error fetching data for backtest: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail=f"Could not connect to data provider for backtest: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error fetching data for backtest: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error fetching data for backtest: {str(e)}")
-
-    # Run the backtest using strategy_engine
-    try:
-        # initial_capital is part of BacktestRequest model with a default
-        # strategy_params are also part of BacktestRequest
-        backtest_result = await strategy_engine.run_single_backtest(
-            historical_data_points=ohlc_data_points_for_backtest, # This is List[OHLCDataPoint]
-            strategy_class=strategy_class,
-            strategy_params=request.parameters, # Pass the parameters from the request
-            backtest_request_details=request,   # Pass the full request for context in the result
-            initial_capital=request.initial_capital
-        )
-        return backtest_result # This is models.BacktestResult, now includes drawdown_curve
-    except ValueError as e: # e.g., issues within strategy logic or data processing in strategy_engine
-        logger.error(f"ValueError during backtest execution: {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail=str(e)) # Bad request if strategy logic fails due to bad params etc.
-    except Exception as e:
-        logger.error(f"Unexpected error during backtest execution: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during backtest execution: {str(e)}")
-
-
 @app.get("/strategies/available", response_model=models.AvailableStrategiesResponse, tags=["Strategies"]) # Added tag
 async def list_available_strategies():
     available_strategies = []

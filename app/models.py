@@ -104,27 +104,6 @@ class AvailableStrategiesResponse(BaseModel):
     """Response model for listing available strategies."""
     strategies: List[StrategyInfo]
 
-class BacktestRequest(BaseModel):
-    """Request model for running a single backtest."""
-    exchange: str
-    token: str
-    start_date: date
-    end_date: date
-    timeframe: str = Field(description="Candle interval for the backtest (e.g., '5T', '1D'). Must match a valid interval format.")
-    strategy_id: str = Field(description="Identifier of the strategy to backtest.")
-    parameters: Dict[str, Any] = Field(description="Key-value pairs of strategy parameters and their chosen values.")
-    initial_capital: float = Field(default=100000.0, gt=0, description="Initial capital for the backtest.")
-    execution_price_type: Literal['open', 'close'] = Field(default='close', description="Price (open or close of the bar) to use for simulated trade execution.")
-
-    @field_validator('timeframe')
-    @classmethod
-    def timeframe_must_be_valid_interval(cls, v: str) -> str:
-        try:
-            HistoricalDataRequest.interval_must_be_valid(v)
-        except ValueError as e:
-            raise ValueError(f"Invalid timeframe: {e}")
-        return v
-
 class Trade(BaseModel):
     """Represents a single simulated trade in a backtest."""
     entry_time: datetime
@@ -135,27 +114,6 @@ class Trade(BaseModel):
     qty: int = Field(default=1, gt=0)
     pnl: Optional[float] = None
     status: Literal["OPEN", "CLOSED"]
-
-class BacktestResult(BaseModel):
-    """Response model containing the results of a backtest."""
-    request: BacktestRequest
-    net_pnl: float
-    total_trades: int
-    winning_trades: int
-    losing_trades: int
-    win_rate: Optional[float] = None
-    average_profit_per_trade: Optional[float] = None
-    average_loss_per_trade: Optional[float] = None
-    profit_factor: Optional[float] = None
-    max_drawdown: float # Percentage
-    sharpe_ratio: Optional[float] = Field(None, description="Risk-adjusted return (requires risk-free rate, not implemented here).")
-    sortino_ratio: Optional[float] = Field(None, description="Risk-adjusted return focusing on downside deviation.")
-    equity_curve: List[Dict[str, Any]] = Field(description="List of equity values over time, e.g., [{'time': datetime, 'equity': float}].")
-    trades: List[Trade]
-    logs: Optional[List[str]] = Field(None, description="Optional logs or messages generated during the backtest.")
-    # Proposed addition for drawdown curve
-    drawdown_curve: Optional[List[Dict[str, Any]]] = Field(None, description="List of drawdown values over time, e.g., [{'time': datetime, 'value': float (percentage)}].")
-
 
 class OptimizationParameterRange(BaseModel):
     """Defines the range and step for a parameter during optimization."""
