@@ -6,6 +6,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date, timedelta, time as dt_time, timezone # Added timezone
 from typing import List, Dict, Optional, Union, TYPE_CHECKING, Any
+from collections import defaultdict # Added defaultdict
 
 from .models import TokenInfo
 
@@ -24,6 +25,22 @@ from . import models
 
 background_executor = ThreadPoolExecutor(max_workers=settings.API_RETRIES + 1)
 _scripmaster_data: Dict[str, pd.DataFrame] = {}
+
+_persistent_1min_data_cache: Dict[str, List[models.OHLCDataPoint]] = defaultdict(list)
+_token_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+# --- New Definition for Market Information ---
+# Store market close times in UTC. Example: NSE closes around 15:30 IST (10:00 UTC).
+# Previous logs indicated last candle at 15:29 UTC.
+# We'll use 15:35 UTC as a practical cutoff for API requests for NSE to include any late data.
+MARKET_INFO = {
+    "NSE": {
+        "close_time_utc": dt_time(15, 29, 0, tzinfo=timezone.utc), # Using 15:35 UTC as cutoff
+        # "open_time_utc": dt_time(3, 45, 0, tzinfo=timezone.utc) # Approx 9:15 IST
+    }
+    # Add other exchanges here as needed
+}
+# --- End of New Market Information --
 
 def load_scripmaster(exchange: str) -> pd.DataFrame:
     global _scripmaster_data
@@ -374,85 +391,178 @@ def _resample_ohlc_data(
         logger.error(f"Resample: Error resampling to {target_interval_str} (rule: {rule}): {e}", exc_info=True)
         return one_min_data_points # Fallback or handle differently
 
+# --- Start of New Cache and Lock Definitions ---
+# Global cache for 1-min data points, keyed by f"{exchange.upper()}:{token}"
+# Stores a list of OHLCDataPoint, sorted by time, with unique timestamps.
+_persistent_1min_data_cache: Dict[str, List[models.OHLCDataPoint]] = defaultdict(list)
+# Lock per token to manage concurrent access to its cache entry and API calls
+_token_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+def _update_token_cache(cache_key: str, new_data_points: List[models.OHLCDataPoint]):
+    """
+    Merges new data points into the persistent cache for the given token.
+    Ensures data is sorted by time and timestamps are unique.
+    Returns the list of points that were actually new and added.
+    """
+    global _persistent_1min_data_cache
+    current_data = _persistent_1min_data_cache[cache_key]
+    
+    existing_timestamps = {dp.time for dp in current_data}
+    truly_new_points = [dp for dp in new_data_points if dp.time not in existing_timestamps]
+    
+    if truly_new_points:
+        current_data.extend(truly_new_points)
+        current_data.sort(key=lambda x: x.time)
+        logger.debug(f"Cache Update: Added {len(truly_new_points)} new points to {cache_key}. Cache size: {len(current_data)}")
+    else:
+        logger.debug(f"Cache Update: No new unique points to add to {cache_key} from the provided list of {len(new_data_points)}.")
+    return truly_new_points
+
+# --- End of New Cache and Lock Definitions ---
+
 
 async def get_historical_data_orchestrator(
     exchange: str,
     token: str,
-    req_start_date: date,       
-    req_end_date: date,         
-    req_interval: str           
+    req_start_date: date,
+    req_end_date: date,
+    req_interval: str
 ) -> List[models.OHLCDataPoint]:
     api_client: ShoonyaApiPy = get_shoonya_api_client()
+    exchange_upper = exchange.upper()
+    cache_key = f"{exchange_upper}:{token}"
+    token_lock = _token_locks[cache_key]
 
-    # Create UTC-aware datetime objects for the requested range
-    db_start_dt_utc = datetime.combine(req_start_date, dt_time.min, tzinfo=timezone.utc)
-    db_end_dt_utc = datetime.combine(req_end_date, dt_time(23, 59, 59), tzinfo=timezone.utc)
+    user_req_start_dt_utc = datetime.combine(req_start_date, dt_time.min, tzinfo=timezone.utc)
+    # This is the user's requested end of day, typically used for filtering final output.
+    user_req_end_dt_boundary_utc = datetime.combine(req_end_date, dt_time(23, 59, 59), tzinfo=timezone.utc)
 
-    # API request datetimes are also UTC aware now
-    api_req_start_dt_utc = db_start_dt_utc
-    api_req_end_dt_utc = db_end_dt_utc
+    logger.info(f"Data Orchestrator: Starting for {cache_key}, Date Range: {req_start_date} to {req_end_date}, Interval: '{req_interval}'.")
+    logger.debug(f"User request UTC start: {user_req_start_dt_utc.isoformat()}, User request input end date: {req_end_date}")
 
-    logger.info(f"Data Orchestrator: {exchange}:{token} for {req_start_date} to {req_end_date}, interval '{req_interval}'.")
-    logger.debug(f"DB query range (UTC): {db_start_dt_utc.isoformat()} to {db_end_dt_utc.isoformat()}")
-    
-    db_1min_data = await _get_historical_data_from_db(exchange, token, db_start_dt_utc, db_end_dt_utc)
-    all_1min_data = list(db_1min_data) # All data points here have UTC-aware .time
-    
-    fetch_from_api = True
-    api_fetch_start_range_utc = api_req_start_dt_utc
-    api_fetch_end_range_utc = api_req_end_dt_utc
+    all_1min_data_for_request: List[models.OHLCDataPoint] = []
 
-    if db_1min_data:
-        latest_db_time_utc = max(dp.time for dp in all_1min_data if isinstance(dp.time, datetime)) # This is UTC-aware
+    async with token_lock:
+        logger.debug(f"Lock acquired for {cache_key}")
+
+        current_utc_datetime = datetime.now(timezone.utc)
+        current_utc_date = current_utc_datetime.date()
+
+        # --- Determine the effective end datetime for data fetching and completeness checks ---
+        # This is the time up to which we expect data to exist or try to fetch for req_end_date.
+        # Default to the full day as per user's request boundary.
+        effective_target_end_dt_utc = datetime.combine(req_end_date, dt_time(23, 59, 59), tzinfo=timezone.utc)
+
+        market_details = MARKET_INFO.get(exchange_upper)
+        if market_details:
+            market_close_time_config = market_details["close_time_utc"]
+            market_close_dt_on_req_end_date = datetime.combine(req_end_date, market_close_time_config)
+            
+            if req_end_date < current_utc_date: # Past day
+                effective_target_end_dt_utc = min(effective_target_end_dt_utc, market_close_dt_on_req_end_date)
+            elif req_end_date == current_utc_date: # Today
+                # For today, target up to current time, but not exceeding market close for that day.
+                # If current time is past market close, target market close.
+                target_for_today = min(current_utc_datetime + timedelta(minutes=2), market_close_dt_on_req_end_date) # Fetch slightly past current time if market open
+                effective_target_end_dt_utc = min(effective_target_end_dt_utc, target_for_today)
+            else: # Future day
+                effective_target_end_dt_utc = min(effective_target_end_dt_utc, market_close_dt_on_req_end_date)
+        logger.info(f"Effective target end datetime for {req_end_date} for {cache_key} is {effective_target_end_dt_utc.isoformat()}")
+        # --- End of effective end datetime determination ---
+
+
+        # DB Query uses the broad user request start and this new effective target end
+        # to ensure we don't query DB for times we know market is closed if not necessary.
+        # However, DB might have data up to 23:59 from previous runs with old logic.
+        # For consistency of DB sync, query DB for the user's raw date range initially.
+        db_query_start_utc = user_req_start_dt_utc
+        db_query_end_utc = datetime.combine(req_end_date, dt_time(23,59,59), tzinfo=timezone.utc) # Query full day for DB
+
+        logger.debug(f"Querying DB for {cache_key} from {db_query_start_utc.isoformat()} to {db_query_end_utc.isoformat()}")
+        db_1min_data = await _get_historical_data_from_db(exchange_upper, token, db_query_start_utc, db_query_end_utc)
         
-        if latest_db_time_utc >= db_end_dt_utc - timedelta(minutes=1):
-            logger.info(f"Data Orchestrator: Sufficient 1-min data found in DB until {latest_db_time_utc.isoformat()}. No API fetch needed.")
-            fetch_from_api = False
+        if db_1min_data:
+            logger.info(f"Fetched {len(db_1min_data)} 1-min points from DB for {cache_key}.")
+            _update_token_cache(cache_key, db_1min_data)
         else:
-            api_fetch_start_range_utc = latest_db_time_utc + timedelta(minutes=1)
-            api_fetch_start_range_utc = max(api_fetch_start_range_utc, api_req_start_dt_utc) # Ensure it doesn't go before request
-            logger.info(f"Data Orchestrator: DB data incomplete (ends {latest_db_time_utc.isoformat()}). "
-                        f"Will try API fetch from {api_fetch_start_range_utc.isoformat()}.")
-    else:
-        logger.info(f"Data Orchestrator: No 1-min data in DB for range. Full API fetch initiated.")
+            logger.info(f"No data from DB for {cache_key} in the range {db_query_start_utc.isoformat()} to {db_query_end_utc.isoformat()}.")
 
-    if fetch_from_api and api_fetch_start_range_utc <= api_fetch_end_range_utc:
-        api_1min_data = await _fetch_1min_data_from_api(
-            api_client, exchange, token, api_fetch_start_range_utc, api_fetch_end_range_utc
-        ) # Returns list of UTC-aware OHLCDataPoint
-        if api_1min_data:
-            asyncio.create_task(
-                _store_data_to_db_background(exchange, token, api_1min_data)
+        current_global_cached_data = _persistent_1min_data_cache[cache_key]
+        # Filter relevant data for the request, considering user's original start and the *effective* end.
+        # The `user_req_end_dt_boundary_utc` is the absolute upper limit for data selection from cache.
+        relevant_cached_data = [
+            dp for dp in current_global_cached_data
+            if user_req_start_dt_utc <= dp.time <= user_req_end_dt_boundary_utc 
+        ]
+        logger.info(f"Initialized with {len(relevant_cached_data)} points from in-memory cache (after DB sync) for {cache_key} within request range.")
+
+        fetch_from_api = True
+        api_fetch_start_range_utc = user_req_start_dt_utc
+        # API fetch will be capped by `effective_target_end_dt_utc`
+        api_fetch_end_range_utc = effective_target_end_dt_utc
+
+        if relevant_cached_data:
+            latest_data_time_utc = max(dp.time for dp in relevant_cached_data)
+            # Check completeness against the effective_target_end_dt_utc
+            if latest_data_time_utc >= effective_target_end_dt_utc - timedelta(minutes=1):
+                logger.info(f"Sufficient data found in cache (up to {latest_data_time_utc.isoformat()}) against effective target {effective_target_end_dt_utc.isoformat()}. No API fetch needed for {cache_key}.")
+                fetch_from_api = False
+            else:
+                api_fetch_start_range_utc = latest_data_time_utc + timedelta(minutes=1)
+                api_fetch_start_range_utc = max(api_fetch_start_range_utc, user_req_start_dt_utc)
+                logger.info(f"Cache data incomplete (ends {latest_data_time_utc.isoformat()}). Will try API fetch for {cache_key} from {api_fetch_start_range_utc.isoformat()} to {api_fetch_end_range_utc.isoformat()}.")
+        else:
+            logger.info(f"No data in cache for {cache_key} relevant to effective range. API fetch initiated: {api_fetch_start_range_utc.isoformat()} to {api_fetch_end_range_utc.isoformat()}.")
+        
+        if fetch_from_api and api_fetch_start_range_utc < api_fetch_end_range_utc: # Ensure start is before end
+            api_1min_data = await _fetch_1min_data_from_api(
+                api_client, exchange_upper, token, api_fetch_start_range_utc, api_fetch_end_range_utc
             )
-            existing_timestamps = {dp.time for dp in all_1min_data}
-            unique_api_data = [dp for dp in api_1min_data if dp.time not in existing_timestamps]
-            all_1min_data.extend(unique_api_data)
-            all_1min_data.sort(key=lambda x: x.time)
-            logger.info(f"Data Orchestrator: Merged {len(unique_api_data)} new 1-min API points.")
-    
-    if not all_1min_data:
-        logger.warning(f"Data Orchestrator: No 1-min data available for {exchange}:{token} after DB and API checks.")
+            if api_1min_data:
+                logger.info(f"Fetched {len(api_1min_data)} 1-min points from API for {cache_key}.")
+                newly_added_api_points = _update_token_cache(cache_key, api_1min_data)
+                if newly_added_api_points:
+                    asyncio.create_task(
+                        _store_data_to_db_background(exchange_upper, token, newly_added_api_points)
+                    )
+                    logger.info(f"Scheduled DB storage for {len(newly_added_api_points)} new API points for {cache_key}.")
+                else:
+                    logger.info(f"No unique new points from API to store in DB for {cache_key}.")
+        elif fetch_from_api and api_fetch_start_range_utc >= api_fetch_end_range_utc:
+             logger.info(f"API fetch skipped for {cache_key}: calculated start time {api_fetch_start_range_utc.isoformat()} is not before end time {api_fetch_end_range_utc.isoformat()}.")
+
+
+        final_cached_data_for_token = _persistent_1min_data_cache[cache_key]
+        # Select data for the user's original full day request boundaries from the updated cache
+        all_1min_data_for_request = [
+            dp for dp in final_cached_data_for_token
+            if user_req_start_dt_utc <= dp.time <= user_req_end_dt_boundary_utc 
+        ]
+        all_1min_data_for_request.sort(key=lambda x: x.time)
+        logger.info(f"After all operations, {len(all_1min_data_for_request)} 1-min points selected for {cache_key} for the user's broad request range.")
+        logger.debug(f"Lock released for {cache_key}")
+    # Lock is released.
+
+    if not all_1min_data_for_request:
+        logger.warning(f"Data Orchestrator: No 1-min data available for {cache_key} after all checks for the period {req_start_date} to {req_end_date}.")
         return []
 
-    final_user_interval_data = []
-    # Standardize interval comparison
-    normalized_req_interval = req_interval.lower()
+    final_user_interval_data: List[models.OHLCDataPoint]
+    normalized_req_interval = req_interval.lower().strip()
     if normalized_req_interval in ['1', '1t', '1m', '1min']:
-        final_user_interval_data = all_1min_data
+        final_user_interval_data = all_1min_data_for_request
     else:
-        final_user_interval_data = _resample_ohlc_data(all_1min_data, req_interval)
-        
-    # Filter final data to be strictly within the day-boundaries of requested start/end dates
-    # All dp.time objects are UTC-aware here.
-    # req_start_date and req_end_date are date objects.
+        logger.info(f"Resampling {len(all_1min_data_for_request)} 1-min points to '{req_interval}' for {cache_key}.")
+        final_user_interval_data = _resample_ohlc_data(all_1min_data_for_request, req_interval)
+    
+    # Final strict filtering based on user's original start/end DATES.
     filtered_output_data = [
         dp for dp in final_user_interval_data
-        if req_start_date <= dp.time.astimezone(timezone.utc).date() <= req_end_date # Compare dates in UTC
+        if req_start_date <= dp.time.astimezone(timezone.utc).date() <= req_end_date
     ]
 
-    logger.info(f"Data Orchestrator: Final processed data for {exchange}:{token} ({req_interval}) has {len(filtered_output_data)} points.")
+    logger.info(f"Data Orchestrator: Final processed data for {cache_key} ({req_interval}) has {len(filtered_output_data)} points for dates {req_start_date} to {req_end_date}.")
     return filtered_output_data
-
 
 async def fetch_and_store_historical_data(
     request: models.HistoricalDataRequest

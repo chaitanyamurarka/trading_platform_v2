@@ -1,7 +1,7 @@
 // backtesting.js
 
 let currentBacktestSettings = { 
-    exchange: 'NSE', token: '3045', symbol: 'TATAMOTORS', timeframe: 'day',
+    exchange: 'NSE', token: '3456', symbol: 'TATAMOTORS', timeframe: '1min',
     strategyId: 'ema_crossover', initialCapital: 100000,
     startDate: '', endDate: '', strategyParams: {}
 };
