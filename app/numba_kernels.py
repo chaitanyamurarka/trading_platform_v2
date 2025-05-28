@@ -89,7 +89,7 @@ def run_ema_crossover_optimization_numba(
             
             # Warm-up check: Need valid prev2 values
             # Initial values of prev2_ema_arr are 0. Only proceed if they have been updated.
-            if i < 2 or prev2_fast_ema_arr[k] == 0.0 or prev2_slow_ema_arr[k] == 0.0:
+            if i < 1 or prev2_fast_ema_arr[k] == 0.0 or prev2_slow_ema_arr[k] == 0.0:
                 if position_arr[k] == POSITION_LONG: equity_arr[k] = cash_arr[k] + current_close
                 else: equity_arr[k] = cash_arr[k]
                 if equity_arr[k] > peak_equity_arr[k]: peak_equity_arr[k] = equity_arr[k]
@@ -128,10 +128,15 @@ def run_ema_crossover_optimization_numba(
                 if current_dd > max_drawdown_arr[k]: max_drawdown_arr[k] = current_dd
                 continue 
 
-            is_bullish_crossover = prev2_fast_ema_arr[k] <= prev2_slow_ema_arr[k] and \
-                                   prev_fast_ema_arr[k] > prev_slow_ema_arr[k]
-            is_bearish_crossover = prev2_fast_ema_arr[k] >= prev2_slow_ema_arr[k] and \
-                                   prev_fast_ema_arr[k] < prev_slow_ema_arr[k]
+            # is_bullish_crossover = prev2_fast_ema_arr[k] <= prev2_slow_ema_arr[k] and \
+            #                        prev_fast_ema_arr[k] > prev_slow_ema_arr[k]
+            # is_bearish_crossover = prev2_fast_ema_arr[k] >= prev2_slow_ema_arr[k] and \
+            #                        prev_fast_ema_arr[k] < prev_slow_ema_arr[k]
+
+            is_bullish_crossover = prev_fast_ema_arr[k] <= prev_slow_ema_arr[k] and \
+                                   current_fast_ema_arr[k] > current_slow_ema_arr[k]
+            is_bearish_crossover = prev_fast_ema_arr[k] >= prev_slow_ema_arr[k] and \
+                                   current_fast_ema_arr[k] < current_slow_ema_arr[k]
 
             exec_price = current_open if execution_price_types[k] == 1 else current_close
 
