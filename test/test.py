@@ -376,8 +376,8 @@ def test_optimization_flow(): # Now includes cancellation test
         "start_date": start_date_opt.strftime("%Y-%m-%d"), "end_date": end_date_opt.strftime("%Y-%m-%d"),
         "timeframe": DEFAULT_TIMEFRAME_DAY, # Day timeframe for optimization usually makes sense
         "parameter_ranges": [ # Use UI param names from StrategyInfo
-            {"name": "fast_ma_length", "start_value": 5, "end_value": 100, "step": 1}, # small range for quick test
-            {"name": "slow_ma_length", "start_value": 15, "end_value": 500, "step": 1}
+            {"name": "fast_ma_length", "start_value": 2, "end_value": 50, "step": 1}, # small range for quick test
+            {"name": "slow_ma_length", "start_value": 5, "end_value": 100, "step": 1}
         ],
         "metric_to_optimize": "net_pnl", 
         "initial_capital": 75000.0,

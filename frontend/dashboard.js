@@ -342,14 +342,13 @@ async function updateDashboardStrategyParamsUI() {
                         }
                         if (maxVal <= minVal) maxVal = minVal + step * 5;
                         console.log(`[dashboard.js:updateDashboardStrategyParamsUI] FAST EMA logic: initial minVal=${minVal}, initial maxVal=${maxVal} (datasetLength/5 ~ ${Math.floor(datasetLength / 5)})`);
-                    } else if (p.name === 'stop_loss_pct') {
-                        minVal = 0.0; maxVal = 0.50; 
-                        step = (p.step !== null && p.step !== undefined && p.step > 0) ? p.step : 0.05; // Fallback to 5% step if config step invalid
-                        console.log(`[dashboard.js:updateDashboardStrategyParamsUI] SL_PCT logic: minVal=${minVal}, maxVal=${maxVal}, step=${step} (p.step was ${p.step}, default fallback 0.05)`);
-                    } else if (p.name === 'take_profit_pct') {
-                        minVal = 0.0; maxVal = 0.50; 
-                        step = (p.step !== null && p.step !== undefined && p.step > 0) ? p.step : 0.05; // Fallback to 5% step
-                        console.log(`[dashboard.js:updateDashboardStrategyParamsUI] TP_PCT logic: minVal=${minVal}, maxVal=${maxVal}, step=${step} (p.step was ${p.step}, default fallback 0.05)`);
+                    } else if (p.name === 'stop_loss_pct' || p.name === 'take_profit_pct') {
+                        // Values from strategy definition (p) are direct percentages (e.g., default 2.0 for 2%, max_value 100.0 for 100%)
+                        minVal = (p.min_value !== null && p.min_value !== undefined) ? parseFloat(p.min_value) : 0.0;
+                        maxVal = (p.max_value !== null && p.max_value !== undefined) ? parseFloat(p.max_value) : 100.0; // Use strategy's max_value, fallback to 100%
+                        step = (p.step !== null && p.step !== undefined && p.step > 0) ? parseFloat(p.step) : 1.0; // Use strategy's step (e.g. 0.1 for 0.1% step or 1.0 for 1% step), fallback 1%
+
+                        console.log(`[dashboard.js:updateDashboardStrategyParamsUI] <span class="math-inline">\{p\.name\.toUpperCase\(\)\} logic\: Using strategy defined ranges\. minVal\=</span>{minVal}, maxVal=<span class="math-inline">\{maxVal\}, step\=</span>{step} (p.min_value: ${p.min_value}, p.max_value: ${p.max_value}, p.step: ${p.step})`);
                     } else { 
                         const defaultPVal = (p.type === 'integer' || p.type === 'int') ? parseInt(p.default) : parseFloat(p.default);
                         minVal = (p.min_value !== null && p.min_value !== undefined) ?

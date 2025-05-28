@@ -23,10 +23,10 @@ class EMACrossoverStrategy(BaseStrategy):
             name=cls.strategy_name,
             description=cls.strategy_description,
             parameters=[
-                StrategyParameter(name="fast_ema_period", label="Fast EMA Period", type="int", default=10, min_value=2, max_value=50, step=1, description="Period for the fast Exponential Moving Average."),
-                StrategyParameter(name="slow_ema_period", label="Slow EMA Period", type="int", default=20, min_value=5, max_value=100, step=1, description="Period for the slow Exponential Moving Average."),
-                StrategyParameter(name="stop_loss_pct", label="Stop Loss %", type="float", default=2.0, min_value=0.0, max_value=10.0, step=0.1, description="Stop loss percentage from entry price."),
-                StrategyParameter(name="take_profit_pct", label="Take Profit %", type="float", default=4.0, min_value=0.0, max_value=20.0, step=0.1, description="Take profit percentage from entry price.")
+                StrategyParameter(name="fast_ema_period", label="Fast EMA Period", type="int", default=10, min_value=2, max_value=100, step=1, description="Period for the fast Exponential Moving Average."),
+                StrategyParameter(name="slow_ema_period", label="Slow EMA Period", type="int", default=20, min_value=5, max_value=500, step=1, description="Period for the slow Exponential Moving Average."),
+                StrategyParameter(name="stop_loss_pct", label="Stop Loss %", type="float", default=0.0, min_value=0.0, max_value=0.0, step=0.1, description="Stop loss percentage from entry price."),
+                StrategyParameter(name="take_profit_pct", label="Take Profit %", type="float", default=0.0, min_value=0.0, max_value=0.0, step=0.1, description="Take profit percentage from entry price.")
             ]
         )
 
