@@ -116,10 +116,10 @@ def run_ema_crossover_optimization_numba(
                 closed_by_sl_tp = False
 
                 if position_arr[k] == POSITION_LONG:
-                    if sl_price_arr[k] > 1e-9 and current_low <= sl_price_arr[k]:
+                    if sl_price_arr[k] > 0.0 and current_low <= sl_price_arr[k]:
                         exit_price_sl_tp = sl_price_arr[k] # Exit at SL price
                         closed_by_sl_tp = True
-                    elif tp_price_arr[k] > 1e-9 and current_high >= tp_price_arr[k]:
+                    elif tp_price_arr[k] > 0.0 and current_high >= tp_price_arr[k]:
                         exit_price_sl_tp = tp_price_arr[k] # Exit at TP price
                         closed_by_sl_tp = True
                     
@@ -127,10 +127,10 @@ def run_ema_crossover_optimization_numba(
                         pnl_k = exit_price_sl_tp - entry_price_arr[k]
                 
                 elif position_arr[k] == POSITION_SHORT:
-                    if sl_price_arr[k] > 1e-9 and current_high >= sl_price_arr[k]:
+                    if sl_price_arr[k] > 0.0 and current_high >= sl_price_arr[k]:
                         exit_price_sl_tp = sl_price_arr[k]
                         closed_by_sl_tp = True
-                    elif tp_price_arr[k] > 1e-9 and current_low <= tp_price_arr[k]:
+                    elif tp_price_arr[k] > 0.0 and current_low <= tp_price_arr[k]:
                         exit_price_sl_tp = tp_price_arr[k]
                         closed_by_sl_tp = True
 
@@ -139,8 +139,8 @@ def run_ema_crossover_optimization_numba(
                 
                 if closed_by_sl_tp:
                     cash_arr[k] += pnl_k
-                    if pnl_k > 1e-9: winning_trades_arr[k] += 1
-                    elif pnl_k < -1e-9: losing_trades_arr[k] += 1
+                    if pnl_k > 0.0: winning_trades_arr[k] += 1
+                    elif pnl_k < -0.0: losing_trades_arr[k] += 1
                     
                     position_arr[k] = POSITION_NONE
                     entry_price_arr[k] = 0.0
@@ -161,8 +161,8 @@ def run_ema_crossover_optimization_numba(
                     if position_arr[k] == POSITION_SHORT: # Close short first
                         pnl_k = entry_price_arr[k] - exec_price # PNL from closing short
                         cash_arr[k] += pnl_k
-                        if pnl_k > 1e-9: winning_trades_arr[k] += 1
-                        elif pnl_k < -1e-9: losing_trades_arr[k] += 1
+                        if pnl_k > 0.0: winning_trades_arr[k] += 1
+                        elif pnl_k < -0.0: losing_trades_arr[k] += 1
                         # total_trades_arr already counted for the short entry
                         position_arr[k] = POSITION_NONE # Reset before new trade
                         entry_price_arr[k] = 0.0
@@ -173,9 +173,9 @@ def run_ema_crossover_optimization_numba(
                         position_arr[k] = POSITION_LONG
                         entry_price_arr[k] = exec_price
                         total_trades_arr[k] += 1
-                        if stop_loss_pcts[k] > 1e-9:
+                        if stop_loss_pcts[k] > 0.0:
                             sl_price_arr[k] = exec_price * (1.0 - stop_loss_pcts[k])
-                        if take_profit_pcts[k] > 1e-9:
+                        if take_profit_pcts[k] > 0.0:
                             tp_price_arr[k] = exec_price * (1.0 + take_profit_pcts[k])
                     action_taken_this_bar = True
 
@@ -183,8 +183,8 @@ def run_ema_crossover_optimization_numba(
                     if position_arr[k] == POSITION_LONG: # Close long first
                         pnl_k = exec_price - entry_price_arr[k] # PNL from closing long
                         cash_arr[k] += pnl_k
-                        if pnl_k > 1e-9: winning_trades_arr[k] += 1
-                        elif pnl_k < -1e-9: losing_trades_arr[k] += 1
+                        if pnl_k > 0.0: winning_trades_arr[k] += 1
+                        elif pnl_k < -0.0: losing_trades_arr[k] += 1
                         # total_trades_arr already counted for the long entry
                         position_arr[k] = POSITION_NONE # Reset before new trade
                         entry_price_arr[k] = 0.0
@@ -195,9 +195,9 @@ def run_ema_crossover_optimization_numba(
                         position_arr[k] = POSITION_SHORT
                         entry_price_arr[k] = exec_price
                         total_trades_arr[k] += 1
-                        if stop_loss_pcts[k] > 1e-9:
+                        if stop_loss_pcts[k] > 0.0:
                             sl_price_arr[k] = exec_price * (1.0 + stop_loss_pcts[k])
-                        if take_profit_pcts[k] > 1e-9:
+                        if take_profit_pcts[k] > 0.0:
                             tp_price_arr[k] = exec_price * (1.0 - take_profit_pcts[k])
                     action_taken_this_bar = True
             
