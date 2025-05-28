@@ -423,6 +423,79 @@ async def get_chart_data_with_strategy(chart_request: models.ChartDataRequest):
         logger.error(f"Unexpected error generating chart data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected server error occurred while generating chart data: {str(e)}")
 
+@app.post("/backtest/run", response_model=models.BacktestResult, tags=["Backtesting"])
+async def run_strategy_backtest(
+    backtest_request: models.BacktestRequest,
+    # api_client: ShoonyaApi = Depends(get_shoonya_api_client) # If direct API interaction needed beyond data
+):
+    logger.info(f"Received backtest request for strategy_id: '{backtest_request.strategy_id}' on {backtest_request.exchange}:{backtest_request.token}")
+
+    strategy_class = STRATEGY_REGISTRY.get(backtest_request.strategy_id)
+    if not strategy_class:
+        logger.error(f"Strategy ID '{backtest_request.strategy_id}' not found for backtesting.")
+        return models.BacktestResult(
+            error_message=f"Strategy ID '{backtest_request.strategy_id}' not found."
+        )
+
+    try:
+        # 1. Fetch Historical Data
+        # CORRECTED LINE: Pass date objects directly if HistoricalDataRequest expects dates.
+        # This assumes HistoricalDataRequest.start_time and .end_time are of type 'date'.
+        hist_data_req = models.HistoricalDataRequest(
+            exchange=backtest_request.exchange,
+            token=backtest_request.token,
+            start_time=backtest_request.start_date, # Use date directly
+            end_time=backtest_request.end_date,     # Use date directly
+            interval=backtest_request.timeframe
+        )
+        
+        # Ensure API client is ready if data_module requires it actively
+        api_client_instance = get_shoonya_api_client()
+        if not api_client_instance:
+             logger.error("Shoonya API client not available for fetching backtest data.")
+             return models.BacktestResult(error_message="Data provider API client not available.")
+
+        historical_data_container = await data_module.fetch_and_store_historical_data(hist_data_req)
+        ohlc_data_points = historical_data_container.data
+
+        if not ohlc_data_points:
+            logger.warning(f"No historical data found for backtest: {hist_data_req.model_dump_json()}. Message: {historical_data_container.message}")
+            return models.BacktestResult(
+                error_message=f"No historical data found for the specified parameters. {historical_data_container.message or ''}"
+            )
+        
+        logger.info(f"Data fetched for backtest ({len(ohlc_data_points)} points). Running simulation...")
+
+        # 2. Run Backtesting Logic (to be implemented in strategy_engine.py)
+        backtest_result = await strategy_engine.perform_backtest_simulation(
+            historical_data_points=ohlc_data_points,
+            strategy_class=strategy_class,
+            strategy_parameters=backtest_request.parameters,
+            initial_capital=backtest_request.initial_capital,
+        )
+        
+        logger.info(f"Backtest completed for {backtest_request.strategy_id} on {backtest_request.exchange}:{backtest_request.token}. Net PnL: {backtest_result.performance_metrics.net_pnl if backtest_result.performance_metrics else 'N/A'}")
+        return backtest_result
+
+    except HTTPException as he: # Re-raise HTTPExceptions
+        logger.error(f"HTTPException during backtest: {he.detail}", exc_info=True)
+        raise he
+    except ValueError as e: # Catches Pydantic validation errors among others
+        logger.error(f"Value error during backtest: {e}", exc_info=True)
+        # Return a 422 response for validation errors
+        raise HTTPException(status_code=422, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error(f"Data file not found during backtest: {e}", exc_info=True)
+        raise HTTPException(status_code=404, detail=f"Historical data file not found: {str(e)}")
+    except ConnectionError as e:
+        logger.error(f"Connection error during backtest data fetching: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Service unavailable for backtest data: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error during backtest for '{backtest_request.strategy_id}': {e}", exc_info=True)
+        # Return a BacktestResult with an error message for non-HTTP unhandled exceptions
+        # Or raise a generic HTTPException
+        raise HTTPException(status_code=500, detail=f"An unexpected server error occurred during backtest: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn

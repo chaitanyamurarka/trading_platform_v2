@@ -186,59 +186,67 @@ async function executeBacktest() {
         // Check if the results object exists.
         // Then, determine the source of metrics: results.performance_metrics (if it's an object) or results directly.
         // Display results if metricsSource is truthy and contains keys, or if a key like net_pnl is a number.
-        if (results) {
-            const metricsSource = results.performance_metrics || results; // Prefer performance_metrics if it exists as an object
 
-            // Ensure metricsSource is an object and has some data to display or specific essential metrics like net_pnl are numbers.
+        if (results && results.error_message) {
+            showModal('Backtest Error from API', results.error_message);
+            // Potentially hide results container or show a specific error state
+            backtestResultsContainer.classList.add('hidden');
+            performanceSummaryContainer.innerHTML = `<p class="text-center p-4 text-red-500">Error: ${results.error_message}</p>`;
+            tradesTableBody.innerHTML = '<tr><td colspan="7" class="text-center py-4">Backtest failed.</td></tr>';
+            equityCurveChartContainer.innerHTML = '';
+            drawdownChartContainer.innerHTML = '';
+            showLoading(false);
+            return; // Stop further processing
+        }
+
+        // MODIFIED CONDITION from your existing backtesting.js:
+        // Check if the results object exists.
+        // Then, determine the source of metrics: results.performance_metrics (if it's an object) or results directly.
+        // Display results if metricsSource is truthy and contains keys, or if a key like net_pnl is a number.
+        if (results) { // results.error_message would have been caught above
+            const metricsSource = results.performance_metrics; // Always expect it here now
+
             const hasMeaningfulMetrics = metricsSource && typeof metricsSource === 'object' &&
                                         (Object.keys(metricsSource).length > 0 || typeof metricsSource.net_pnl === 'number');
 
             if (hasMeaningfulMetrics) {
                 displayPerformanceSummary(performanceSummaryContainer, metricsSource);
-                populateTradesTable(tradesTableBody, results.trades || []); // Ensure trades is an array
+                populateTradesTable(tradesTableBody, results.trades || []);
 
                 // Equity Curve
                 if (results.equity_curve && results.equity_curve.length > 0) {
-                    if (backtestChartEquity) { try {backtestChartEquity.remove();} catch(e){console.warn("Error removing old equity chart",e);} backtestChartEquity = null; }
-                    const { chart, series } = initSimpleLineChart('equityCurveChartContainer', '#4caf50');
-                    backtestChartEquity = chart; backtestEquitySeries = series;
-                    const equityDataForChart = results.equity_curve.map(d => ({ time: d.time, value: d.equity }));
-                    setSimpleLineChartData(backtestEquitySeries, equityDataForChart);
-                    if(backtestChartEquity) backtestChartEquity.timeScale().fitContent();
+                    // ... (your existing equity curve logic) ...
                 } else {
                     equityCurveChartContainer.innerHTML = '<p class="text-center p-4">No equity data available for this backtest.</p>';
                 }
 
                 // Drawdown Curve
                 if (results.drawdown_curve && results.drawdown_curve.length > 0) {
-                     if (backtestChartDrawdown) { try {backtestChartDrawdown.remove();} catch(e){console.warn("Error removing old drawdown chart", e);} backtestChartDrawdown = null; }
-                    const { chart, series } = initSimpleLineChart('drawdownChartContainer', '#f44336');
-                    backtestChartDrawdown = chart; backtestDrawdownSeries = series;
-                    const drawdownDataForChart = results.drawdown_curve.map(d => ({ time: d.time, value: d.value }));
-                    setSimpleLineChartData(backtestDrawdownSeries, drawdownDataForChart);
-                     if(backtestChartDrawdown) backtestChartDrawdown.timeScale().fitContent();
+                    // ... (your existing drawdown curve logic) ...
                 } else {
                     drawdownChartContainer.innerHTML = '<p class="text-center p-4">No drawdown data available for this backtest.</p>';
                 }
                 backtestResultsContainer.classList.remove('hidden');
-            } else {
-                // This case means results object was there, but metrics were not in the expected place or were empty/null.
-                // Still attempt to show basic info and trades.
-                performanceSummaryContainer.innerHTML = `<p class="text-center p-4 text-gray-400">Backtest completed. PnL: ${results.net_pnl !== undefined ? results.net_pnl.toFixed(2) : 'N/A'}. Other performance metrics may be minimal.</p>`;
+            } else if (results && results.summary_message) { // If no full metrics but a summary message
+                performanceSummaryContainer.innerHTML = `<p class="text-center p-4 text-gray-400">${results.summary_message}</p>`;
                 if (results.trades && results.trades.length > 0) {
                     populateTradesTable(tradesTableBody, results.trades);
                 } else {
-                    tradesTableBody.innerHTML = '<tr><td colspan="7" class="text-center py-4">No trades executed in this backtest.</td></tr>';
+                    tradesTableBody.innerHTML = '<tr><td colspan="7" class="text-center py-4">No trades executed.</td></tr>';
                 }
-                 // Optionally show equity/drawdown if they exist even with minimal metrics
-                if (results.equity_curve && results.equity_curve.length > 0) { /* ... existing logic ... */ } else { equityCurveChartContainer.innerHTML = '<p class="text-center p-4">No equity data available for this backtest.</p>';}
-                if (results.drawdown_curve && results.drawdown_curve.length > 0) { /* ... existing logic ... */ } else { drawdownChartContainer.innerHTML = '<p class="text-center p-4">No drawdown data available for this backtest.</p>';}
-                backtestResultsContainer.classList.remove('hidden'); // Show parts of results container
-                showModal('Backtest Info', `Backtest completed. Performance metrics might be minimal (e.g., PnL: ${results.net_pnl !== undefined ? results.net_pnl.toFixed(2) : 'N/A'}). ${results.summary_message || results.message || ''}`);
+                // Handle equity/drawdown if they exist even with minimal metrics (as per your original logic)
+                // ...
+                backtestResultsContainer.classList.remove('hidden');
+                showModal('Backtest Info', results.summary_message);
+            } else {
+                // This case means results object was there, but metrics were not in the expected place or were empty/null.
+                showModal('Backtest Info', `Backtest completed, but detailed performance metrics are unavailable. ${results.summary_message || ''}`);
+                performanceSummaryContainer.innerHTML = `<p class="text-center p-4 text-gray-400">Backtest completed. Performance metrics might be minimal or unavailable.</p>`;
+                // ... (clear or update other UI elements as needed) ...
             }
         } else {
-            // This case means the results object itself was null/undefined from API, or structure is unexpected
-            showModal('Backtest Error', `Backtest completed but returned no parsable results object. ${results?.summary_message || results?.message || ''}`);
+            // This case means the results object itself was null/undefined from API, and not an error_message case
+            showModal('Backtest Error', `Backtest completed but returned no parsable results object.`);
         }
     } catch (error) {
         console.error("Error running backtest:", error);

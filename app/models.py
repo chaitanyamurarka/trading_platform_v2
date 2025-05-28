@@ -248,3 +248,58 @@ class FloatStrategyParameter(StrategyParameter):
     default: float
     value: Optional[float] = None
     # min_value, max_value, step are already float in base
+
+##### Backtesting 
+
+class BacktestRequest(BaseModel):
+    strategy_id: str
+    exchange: str
+    token: str
+    start_date: date
+    end_date: date
+    timeframe: str
+    initial_capital: float = Field(gt=0)
+    parameters: Dict[str, Any]
+
+class TradeEntry(BaseModel):
+    entry_time: datetime
+    exit_time: Optional[datetime] = None
+    trade_type: str # "BUY", "SELL" (for short), "EXIT_LONG", "EXIT_SHORT"
+    quantity: float
+    entry_price: float
+    exit_price: Optional[float] = None
+    pnl: Optional[float] = None
+    # Potentially add commission, slippage etc.
+
+class EquityDrawdownPoint(BaseModel):
+    time: datetime
+    value: float # Equity value or Drawdown value
+
+class BacktestPerformanceMetrics(BaseModel):
+    net_pnl: float
+    net_pnl_pct: float
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: Optional[float] = None # winning_trades / total_trades if total_trades > 0
+    loss_rate: Optional[float] = None # losing_trades / total_trades if total_trades > 0
+    average_profit_per_trade: Optional[float] = None
+    average_loss_per_trade: Optional[float] = None
+    average_trade_pnl: Optional[float] = None
+    profit_factor: Optional[float] = None # Gross profit / Gross loss
+    max_drawdown: float
+    max_drawdown_pct: float
+    sharpe_ratio: Optional[float] = None # Needs risk-free rate and more complex calc
+    sortino_ratio: Optional[float] = None # Needs risk-free rate and downside deviation
+    total_fees: float = 0.0
+    # Add other relevant metrics
+
+class BacktestResult(BaseModel):
+    performance_metrics: Optional[BacktestPerformanceMetrics] = None
+    trades: List[TradeEntry] = []
+    equity_curve: List[EquityDrawdownPoint] = []
+    drawdown_curve: List[EquityDrawdownPoint] = []
+    summary_message: Optional[str] = None
+    error_message: Optional[str] = None
+    # Include original request parameters for reference if needed
+    # request_details: Optional[BacktestRequest] = None

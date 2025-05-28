@@ -10,7 +10,6 @@ import sys
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
-
 if __name__ == "__main__":
     # Uvicorn server configuration
     host = "0.0.0.0"  # Listen on all available network interfaces

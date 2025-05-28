@@ -134,3 +134,23 @@ async function cancelOptimization(jobId) {
 async function healthCheck() {
     return fetchData('/health');
 }
+
+// This function is called by backtesting.js
+async function runBacktest(requestBody) {
+    const response = await fetch(`${API_BASE_URL}/backtest/run`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+    });
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to parse error response' }));
+        console.error("API Error in runBacktest:", response.status, errorData);
+        // Throw an error that includes details from the backend if possible
+        const err = new Error(`Backtest API request failed with status ${response.status}: ${errorData.detail || errorData.message || response.statusText}`);
+        err.data = errorData; // Attach full error data
+        throw err;
+    }
+    return response.json();
+}

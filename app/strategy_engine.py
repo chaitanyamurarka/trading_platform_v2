@@ -4,13 +4,180 @@ from typing import Dict, Any, Type, List, Optional, Tuple, Union
 from datetime import datetime, date, timezone # Ensure timezone is imported
 import time 
 
+from .models import OHLCDataPoint, TradeEntry, EquityDrawdownPoint, BacktestPerformanceMetrics, BacktestResult
 from .config import logger
 from .models import (
     OHLCDataPoint,
     ChartDataRequest, ChartDataResponse, IndicatorSeries, TradeMarker
 )
+from .models import ( # Assuming these are defined in app/models.py
+    OHLCDataPoint,
+    TradeEntry, # This is for the BacktestResult
+    EquityDrawdownPoint,
+    BacktestPerformanceMetrics,
+    BacktestResult,
+    Trade as ModelTrade # This is the Trade model used by PortfolioState
+)
 from .strategies.base_strategy import BaseStrategy, PortfolioState # BaseStrategy.get_indicator_series expects pd.DatetimeIndex
 
+async def perform_backtest_simulation(
+    historical_data_points: List[OHLCDataPoint],
+    strategy_class: Type[BaseStrategy],
+    strategy_parameters: Dict[str, Any],
+    initial_capital: float,
+) -> BacktestResult:
+    
+    if not historical_data_points:
+        return BacktestResult(error_message="No historical data provided for simulation.")
+
+    try:
+        df = pd.DataFrame([p.model_dump() for p in historical_data_points])
+        df['time'] = pd.to_datetime(df['time'])
+        df = df.set_index('time') # df.index will be pd.Timestamp
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        df.dropna(subset=['open', 'high', 'low', 'close'], inplace=True)
+        if df.empty:
+            return BacktestResult(error_message="Historical data became empty after cleaning.")
+    except Exception as e:
+        logger.error(f"Error processing historical data for backtest: {e}", exc_info=True)
+        return BacktestResult(error_message=f"Error processing historical data: {str(e)}")
+
+    try:
+        # Initialize PortfolioState
+        portfolio_state = PortfolioState(initial_capital=initial_capital)
+    except Exception as e:
+        logger.error(f"Error initializing PortfolioState for backtest: {e}", exc_info=True)
+        return BacktestResult(error_message=f"Error initializing portfolio state: {str(e)}")
+
+    try:
+        # Initialize strategy instance. shared_ohlc_data should be the DataFrame with DatetimeIndex.
+        # The EMACrossoverStrategy.__init__ expects shared_ohlc_data, params, and portfolio
+        strategy_instance = strategy_class(
+            shared_ohlc_data=df.copy(), # Pass a copy to avoid unintended modifications if df is reused
+            params=strategy_parameters,
+            portfolio=portfolio_state
+        )
+        # _initialize_strategy_state is called by super().__init__, which calculates EMAs
+    except Exception as e:
+        logger.error(f"Error initializing strategy '{strategy_class.get_info().name}' for backtest: {e}", exc_info=True)
+        return BacktestResult(error_message=f"Error initializing strategy '{strategy_class.get_info().name}': {str(e)}")
+
+    # --- Main Backtesting Loop ---
+    if df.empty:
+        return BacktestResult(error_message="No data to process for backtest after strategy initialization.")
+
+    # Record initial equity point using the first bar's data
+    # PortfolioState.record_equity expects a pandas Timestamp and a price
+    try:
+        strategy_instance.portfolio.record_equity(df.index[0], df['close'].iloc[0])
+    except IndexError:
+        logger.error("DataFrame is empty, cannot record initial equity.")
+        return BacktestResult(error_message="Cannot record initial equity, data is empty.")
+
+
+    for bar_idx in range(len(df)):
+        try:
+            # process_bar handles signal generation, SL/TP checks, and trade execution via portfolio methods
+            strategy_instance.process_bar(bar_idx)
+            
+            # Record equity after each bar is processed.
+            # The PortfolioState.record_equity method is used for this.
+            current_bar_timestamp = df.index[bar_idx] # This is a pd.Timestamp
+            current_bar_close = df['close'].iloc[bar_idx]
+            strategy_instance.portfolio.record_equity(current_bar_timestamp, current_bar_close)
+        except Exception as e:
+            logger.error(f"Error during simulation at bar {bar_idx} ({df.index[bar_idx]}): {e}", exc_info=True)
+            # Optionally, continue simulation for partial results or stop
+            return BacktestResult(error_message=f"Error during simulation at bar {bar_idx} ({df.index[bar_idx]}): {str(e)}")
+
+    # --- Extract and Format Results ---
+    # Trades from portfolio are List[models.Trade]
+    portfolio_trades: List[ModelTrade] = strategy_instance.portfolio.trades
+    
+    # Convert portfolio trades (ModelTrade) to TradeEntry for BacktestResult
+    formatted_trades: List[TradeEntry] = []
+    for t in portfolio_trades:
+        formatted_trades.append(TradeEntry(
+            entry_time=t.entry_time,
+            exit_time=t.exit_time,
+            trade_type=t.trade_type, # e.g., "LONG", "SHORT"
+            quantity=t.qty, # Assuming models.Trade has 'qty'
+            entry_price=t.entry_price,
+            exit_price=t.exit_price,
+            pnl=t.pnl
+        ))
+
+    # Equity Curve from portfolio is List[Dict[str, Any]] with "time" and "equity"
+    equity_curve_from_portfolio = strategy_instance.portfolio.equity_curve
+    equity_curve_points: List[EquityDrawdownPoint] = [
+        EquityDrawdownPoint(time=eq_point["time"], value=eq_point["equity"])
+        for eq_point in equity_curve_from_portfolio
+    ]
+
+    # Drawdown Curve Calculation
+    drawdown_curve_points: List[EquityDrawdownPoint] = []
+    peak_for_drawdown = initial_capital
+    if equity_curve_points:
+        peak_for_drawdown = equity_curve_points[0].value # Initialize with first equity value
+        for eq_point in equity_curve_points:
+            if eq_point.value > peak_for_drawdown:
+                peak_for_drawdown = eq_point.value
+            drawdown_value = peak_for_drawdown - eq_point.value
+            drawdown_percentage = (drawdown_value / peak_for_drawdown) * 100 if peak_for_drawdown > 0 else 0
+            drawdown_curve_points.append(EquityDrawdownPoint(time=eq_point.time, value=drawdown_percentage))
+    else: # Handle empty equity curve (e.g., no bars processed)
+        # Add a single point for consistency if needed by frontend, or leave empty
+        # For now, let's match previous behavior of adding a point if empty
+        drawdown_curve_points.append(EquityDrawdownPoint(time=datetime.now(), value=0))
+
+
+    # --- Calculate Performance Metrics ---
+    final_equity = equity_curve_points[-1].value if equity_curve_points else initial_capital
+    net_pnl = final_equity - initial_capital
+    net_pnl_pct = (net_pnl / initial_capital) * 100 if initial_capital != 0 else 0
+    
+    total_closed_trades = len([t for t in formatted_trades if t.exit_time is not None])
+    winning_trades_count = len([t for t in formatted_trades if t.pnl is not None and t.pnl > 0])
+    losing_trades_count = len([t for t in formatted_trades if t.pnl is not None and t.pnl < 0]) # explicit <0 for loss
+    
+    win_rate = (winning_trades_count / total_closed_trades) * 100 if total_closed_trades > 0 else 0
+    
+    max_drawdown_percentage = max(d.value for d in drawdown_curve_points) if drawdown_curve_points else 0
+
+    # TODO: Implement more detailed metrics (Profit Factor, Sharpe, etc.)
+    # For Profit Factor: sum_profits / abs(sum_losses)
+    # For Avg Profit/Loss: sum_profits / winning_trades_count, etc.
+
+    performance_metrics = BacktestPerformanceMetrics(
+        net_pnl=round(net_pnl, 2),
+        net_pnl_pct=round(net_pnl_pct, 2),
+        total_trades=total_closed_trades,
+        winning_trades=winning_trades_count,
+        losing_trades=losing_trades_count, # Corrected this
+        win_rate=round(win_rate, 2),
+        loss_rate=round(((losing_trades_count / total_closed_trades) * 100 if total_closed_trades > 0 else 0), 2),
+        max_drawdown=round(max_drawdown_percentage, 2), # Storing max_drawdown_pct
+        max_drawdown_pct=round(max_drawdown_percentage, 2),
+        average_profit_per_trade=None, # Placeholder
+        average_loss_per_trade=None,   # Placeholder
+        average_trade_pnl= (net_pnl / total_closed_trades) if total_closed_trades > 0 else None, # Placeholder
+        profit_factor=None,            # Placeholder
+        sharpe_ratio=None,             # Placeholder
+        sortino_ratio=None,            # Placeholder
+        total_fees=0.0                 # Placeholder
+    )
+
+    summary_msg = f"Backtest completed. Net PnL: {performance_metrics.net_pnl:.2f} ({performance_metrics.net_pnl_pct:.2f}%). Trades: {performance_metrics.total_trades}."
+
+    return BacktestResult(
+        performance_metrics=performance_metrics,
+        trades=formatted_trades,
+        equity_curve=equity_curve_points,
+        drawdown_curve=drawdown_curve_points,
+        summary_message=summary_msg
+    )
 
 def calculate_performance_metrics(
     portfolio: PortfolioState,
