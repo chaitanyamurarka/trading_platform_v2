@@ -1,56 +1,47 @@
 // dashboard.js
 
-let availableStrategies = []; // To store strategy configurations
-let availableSymbols = []; // To store symbols for the selected exchange
+let availableStrategies = []; 
+let availableSymbols = []; 
 
-// DOM Elements specific to dashboard (will be accessed after page load)
 let exchangeSelect, symbolSelect, timeframeSelect, strategySelect,
     strategyParamsContainer, applyChartButton, chartHeader,
     goToBacktestButton, goToOptimizeButton;
 
-
 /**
  * Helper function to format time for Lightweight Charts.
- * Accepts ISO strings (extracts<y_bin_46>-MM-DD),<y_bin_46>-MM-DD strings, or Unix timestamps (assumed seconds).
- * @param {string|number} timeValue - The time value from the API.
- * @returns {string|number} - Formatted time suitable for Lightweight Charts.
+ * Now expects backend to send UTC epoch second timestamps for chart data.
+ * @param {number} timeValue - The UTC epoch second timestamp from the API.
+ * @returns {number} - Formatted time suitable for Lightweight Charts (UTC epoch seconds).
  */
 function formatTimeForLightweightCharts(timeValue) {
-    if (typeof timeValue === 'string') {
-        if (timeValue.includes('T')) {
-            return timeValue.split('T')[0]; // Convert<y_bin_46>-MM-DDTHH:MM:SS to<y_bin_46>-MM-DD
-        }
-        // Check if it's already in<y_bin_46>-MM-DD format
-        if (/^\d{4}-\d{2}-\d{2}$/.test(timeValue)) {
-            return timeValue;
-        }
-        // If it's a string but not in expected format, try parsing as date then formatting
-        const date = new Date(timeValue);
-        if (!isNaN(date.getTime())) {
-            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        }
-        console.warn(`Unparseable string time format: ${timeValue}`);
-        return timeValue; // Fallback
-    } else if (typeof timeValue === 'number') {
-        // Assuming the number is a Unix timestamp in seconds or milliseconds.
-        // Lightweight Charts expects seconds.
+    if (typeof timeValue === 'number') {
+        // Backend should be sending UTC epoch seconds.
+        // Lightweight Charts expects seconds. If backend accidentally sends ms, convert.
         if (timeValue > 2000000000000) { // Heuristic: if timestamp is for year > 2033 (approx 2 * 10^12 ms), likely ms
+            console.warn("Received a large timestamp, assuming milliseconds and converting to seconds:", timeValue);
             return Math.floor(timeValue / 1000);
         }
         return timeValue; // Assume seconds
     }
-    console.warn(`Unexpected time format: ${timeValue}, type: ${typeof timeValue}. Passing as is.`);
-    return timeValue; // Fallback for other types
+    // Log an error if the backend sends something other than a number for chart time values.
+    console.error(`formatTimeForLightweightCharts expected a number (UTC timestamp), but received: ${timeValue} (type: ${typeof timeValue})`);
+    // Fallback for unexpected types - this might lead to chart errors
+    // Attempt to parse if it's a string that new Date might handle as UTC (e.g. ISO with Z)
+    if (typeof timeValue === 'string') {
+        const d = new Date(timeValue);
+        if (!isNaN(d.getTime())) {
+            console.warn(`formatTimeForLightweightCharts received string, attempting parse: ${timeValue}`);
+            return Math.floor(d.getTime() / 1000);
+        }
+    }
+    // If it's not a number and not a parseable string, it's problematic.
+    // Returning original value might break the chart. Consider returning undefined or a specific error marker.
+    return timeValue;
 }
 
 
-/**
- * Initializes the Dashboard page.
- * This function is called when the dashboard page is loaded.
- */
 async function initDashboardPage() {
     console.log("Initializing Dashboard Page...");
-    // Assign DOM elements
     exchangeSelect = document.getElementById('exchangeSelect');
     symbolSelect = document.getElementById('symbolSelect');
     timeframeSelect = document.getElementById('timeframeSelect');
@@ -61,61 +52,54 @@ async function initDashboardPage() {
     goToBacktestButton = document.getElementById('goToBacktestButton');
     goToOptimizeButton = document.getElementById('goToOptimizeButton');
 
-    // Set default values from currentSymbolData state
     timeframeSelect.value = currentSymbolData.timeframe;
 
-    // Add event listeners
     exchangeSelect.addEventListener('change', handleExchangeChange);
     symbolSelect.addEventListener('change', handleSymbolChange);
     strategySelect.addEventListener('change', handleStrategyChangeOnDashboard);
     applyChartButton.addEventListener('click', applySettingsToChart);
     goToBacktestButton.addEventListener('click', () => {
-        currentBacktestSettings = { ...currentSymbolData }; // Pass current dashboard state
+        currentBacktestSettings = { ...currentSymbolData, strategyParams: { ...currentSymbolData.strategyParams } };
         loadPage('backtesting');
     });
     goToOptimizeButton.addEventListener('click', () => {
-        currentOptimizationSettings = { ...currentSymbolData }; // Pass current dashboard state
+        currentOptimizationSettings = { ...currentSymbolData, strategyParams: { ...currentSymbolData.strategyParams } }; // Pass current dashboard state
         loadPage('optimization');
     });
 
-
     showLoading(true);
     try {
-        if (window.chartInstance) { // If chart exists from another page, clear it
+        if (window.chartInstance) { 
             clearChart(window.chartInstance);
-            window.chartInstance = null; // Ensure it's re-initialized for dashboard
+            window.chartInstance = null; 
         }
-        window.chartInstance = initChart('chartContainer');
+        window.chartInstance = initChart('chartContainer'); // initChart now handles IST localization
         if (!window.chartInstance) {
             showModal('Chart Error', 'Could not initialize the main chart.');
             showLoading(false);
             return;
         }
-        // Handle chart resize
         new ResizeObserver(() => {
             if (window.chartInstance && document.getElementById('chartContainer')) {
                 resizeChart(window.chartInstance, 'chartContainer');
             }
         }).observe(document.getElementById('chartContainerWrapper'));
 
-
         const strategiesData = await getAvailableStrategies();
         if (strategiesData && strategiesData.strategies) {
             availableStrategies = strategiesData.strategies;
-            // Use 'id' from models.StrategyInfo, not 'strategy_id'
             populateSelect(strategySelect, availableStrategies, 'id', 'name', currentSymbolData.strategyId);
-            // Ensure currentSymbolData.strategyId is updated if a selection was made or defaulted
             if (strategySelect.value) {
                 currentSymbolData.strategyId = strategySelect.value;
             } else if (availableStrategies.length > 0) {
-                currentSymbolData.strategyId = availableStrategies[0].id; // Default to first if no specific default
+                currentSymbolData.strategyId = availableStrategies[0].id; 
                 strategySelect.value = currentSymbolData.strategyId;
             } else {
-                currentSymbolData.strategyId = null; // No strategies available
+                currentSymbolData.strategyId = null; 
             }
         } else {
             showModal('Error', 'Could not load strategies.');
-            availableStrategies = []; // Ensure it's an array
+            availableStrategies = []; 
             currentSymbolData.strategyId = null;
         }
 
@@ -129,10 +113,7 @@ async function initDashboardPage() {
             return;
         }
         await loadSymbolsForExchange(currentSymbolData.exchange, currentSymbolData.token);
-
-        // This will also trigger initial optimization for best params AND initial chart load
-        await updateDashboardStrategyParamsUI();
-
+        await updateDashboardStrategyParamsUI(); // This also triggers initial chart load
     } catch (error) {
         console.error("Error initializing dashboard:", error);
         showModal('Initialization Error', `Failed to initialize dashboard: ${error.data?.message || error.message}`);
@@ -141,11 +122,6 @@ async function initDashboardPage() {
     }
 }
 
-/**
- * Fetches and populates symbols for the selected exchange.
- * @param {string} exchange - The selected exchange.
- * @param {string} [defaultToken=''] - Optional token to select by default.
- */
 async function loadSymbolsForExchange(exchange, defaultToken = '') {
     if (!symbolSelect) {
         console.error("loadSymbolsForExchange: symbolSelect element is not available.");
@@ -156,7 +132,6 @@ async function loadSymbolsForExchange(exchange, defaultToken = '') {
         const data = await getSymbolsForExchange(exchange);
         availableSymbols = data.symbols || [];
         const filteredSymbols = availableSymbols.filter(s => ['EQ', 'INDEX', 'FUTIDX', 'FUTSTK', 'OPTIDX', 'OPTSTK'].includes(s.instrument) || !s.instrument);
-
         populateSelect(symbolSelect, filteredSymbols, 'token', 'trading_symbol', defaultToken || (filteredSymbols.length > 0 ? filteredSymbols[0].token : ''));
         
         if (symbolSelect.value) {
@@ -168,89 +143,98 @@ async function loadSymbolsForExchange(exchange, defaultToken = '') {
             if (selectedSymbolObj) {
                  currentSymbolData.token = defaultToken;
                  currentSymbolData.symbol = selectedSymbolObj.symbol;
-                 if (![...symbolSelect.options].some(opt => opt.value === defaultToken)) {
-                    console.warn(`Default token ${defaultToken} was not in filtered list but found in all symbols. Ensure populateSelect handles this case.`);
-                 }
+                 // Ensure the option is added if it was filtered out but is the default
+                 if (![...symbolSelect.options].some(opt => opt.value === defaultToken) && filteredSymbols.every(s => s.token !== defaultToken)) {
+                    const opt = document.createElement('option');
+                    opt.value = selectedSymbolObj.token;
+                    opt.textContent = selectedSymbolObj.trading_symbol;
+                    opt.selected = true; // Select it
+                    symbolSelect.appendChild(opt); // Or insert appropriately if list should be sorted
+                    symbolSelect.value = defaultToken; // Ensure it's set
+                }
             } else {
-                currentSymbolData.token = '';
-                currentSymbolData.symbol = '';
+                currentSymbolData.token = ''; currentSymbolData.symbol = '';
             }
         } else if (filteredSymbols.length > 0) {
             const firstSymbol = filteredSymbols[0];
-            currentSymbolData.token = firstSymbol.token;
-            currentSymbolData.symbol = firstSymbol.symbol;
-            symbolSelect.value = firstSymbol.token; // Explicitly set select value
+            currentSymbolData.token = firstSymbol.token; currentSymbolData.symbol = firstSymbol.symbol;
+            symbolSelect.value = firstSymbol.token;
         } else {
-            currentSymbolData.token = '';
-            currentSymbolData.symbol = '';
+            currentSymbolData.token = ''; currentSymbolData.symbol = '';
         }
     } catch (error) {
         console.error(`Error fetching symbols for ${exchange}:`, error);
         showModal('Symbol Error', `Could not load symbols for ${exchange}: ${error.data?.detail || error.message}`);
         symbolSelect.innerHTML = '<option value="">Error loading</option>';
-        currentSymbolData.token = '';
-        currentSymbolData.symbol = '';
+        currentSymbolData.token = ''; currentSymbolData.symbol = '';
     } finally {
         showLoading(false);
     }
 }
 
-/**
- * Handles exchange selection change.
- */
 async function handleExchangeChange() {
     currentSymbolData.exchange = exchangeSelect.value;
+    // Reset symbol and token before loading new symbols
+    currentSymbolData.token = ''; 
+    currentSymbolData.symbol = '';
+    symbolSelect.innerHTML = '<option value="">Loading symbols...</option>'; // Clear previous symbols
     await loadSymbolsForExchange(currentSymbolData.exchange); 
-    // await updateDashboardStrategyParamsUI(); // Re-fetch optimal params for new default symbol and reload chart
+    // updateDashboardStrategyParamsUI will be called if loadSymbols triggers a change or if explicitly called after symbol selection
+    // If loadSymbolsForExchange sets a default symbol, it should ideally trigger handleSymbolChange or similar logic
+    // For now, let's rely on the apply button or explicit call after full selection.
+    // Or, if a symbol is auto-selected, directly call:
+    if(currentSymbolData.token){
+        await updateDashboardStrategyParamsUI();
+    } else {
+        // Clear chart and params if no symbol selected
+        if (strategyParamsContainer) strategyParamsContainer.innerHTML = '<p class="text-sm text-gray-400">Select symbol and strategy.</p>';
+        if (window.chartInstance) clearChart(window.chartInstance);
+        if (chartHeader) chartHeader.textContent = 'Please select symbol and strategy.';
+    }
 }
 
-/**
- * Handles symbol selection change.
- */
 function handleSymbolChange() {
     const selectedToken = symbolSelect.value;
     const selectedSymbolObj = availableSymbols.find(s => s.token === selectedToken);
     if (selectedSymbolObj) {
         currentSymbolData.token = selectedToken;
         currentSymbolData.symbol = selectedSymbolObj.symbol;
-    } else {
+    } else { // Fallback if symbol not in availableSymbols (e.g. custom input)
         currentSymbolData.token = selectedToken; 
         currentSymbolData.symbol = symbolSelect.options[symbolSelect.selectedIndex]?.text || selectedToken;
     }
-    // await updateDashboardStrategyParamsUI(); // Re-fetch optimal params for new symbol and reload chart
+    // Fetch optimal params for new symbol and reload chart
+    // This implies that changing symbol should auto-apply. If not desired, remove this call.
+    if(currentSymbolData.token && currentSymbolData.strategyId){
+         updateDashboardStrategyParamsUI();
+    }
 }
 
-/**
- * Handles strategy selection change on the dashboard.
- * Updates the strategy parameters UI and reloads the chart with new optimal params.
- */
 async function handleStrategyChangeOnDashboard() {
     currentSymbolData.strategyId = strategySelect.value;
-    await updateDashboardStrategyParamsUI(); 
+    if(currentSymbolData.token && currentSymbolData.strategyId){
+        await updateDashboardStrategyParamsUI(); 
+    }
 }
 
-/**
- * Updates the strategy parameters UI on the dashboard.
- * Fetches best parameters via optimization if required, then applies to chart.
- */
 async function updateDashboardStrategyParamsUI() {
     const selectedStrategyId = strategySelect.value || currentSymbolData.strategyId; 
     if (!selectedStrategyId) {
-        console.warn("No strategy selected, cannot update params or chart.");
         if (strategyParamsContainer) strategyParamsContainer.innerHTML = '<p class="text-sm text-gray-400">Please select a strategy.</p>';
-        if (window.chartInstance) clearChart(window.chartInstance);
-        if (chartHeader) chartHeader.textContent = 'Please select a strategy.';
+        // Don't clear chart here, let applySettingsToChart handle it based on overall state
         return;
     }
     currentSymbolData.strategyId = selectedStrategyId; 
-
-    const strategyConfig = availableStrategies.find(s => s.id === selectedStrategyId); // Use 'id' here
+    const strategyConfig = availableStrategies.find(s => s.id === selectedStrategyId);
 
     if (strategyConfig && strategyParamsContainer) {
         strategyParamsContainer.innerHTML = '<p class="text-sm text-gray-400">Fetching optimal parameters...</p>';
         showLoading(true);
-
         try {
+            // ... (rest of the quick optimization logic from your existing file, it's quite complex)
+            // This part for fetching optimal parameters is kept as is from your provided file
+            // Ensure it correctly uses selectedStrategyId, currentSymbolData.exchange, currentSymbolData.token, etc.
+            // And that `currentSymbolData.strategyParams` is populated with typed parameters.
             const paramRangesForPayload = []; 
             let hasNumericParamsForOpt = false;
 
@@ -295,7 +279,7 @@ async function updateDashboardStrategyParamsUI() {
                     end_date: formatDateForAPI(endDate),
                     initial_capital: 100000,
                     parameter_ranges: paramRangesForPayload, 
-                    metric_to_optimize: 'net_pnl'
+                    metric_to_optimize: 'net_pnl' // Or a configurable default
                 };
                 console.log("[updateDashboardStrategyParamsUI] optRequest payload:", JSON.parse(JSON.stringify(optRequest)));
 
@@ -305,7 +289,7 @@ async function updateDashboardStrategyParamsUI() {
                     let attempts = 0;
                     const maxAttempts = 15; 
                     while (jobStatus && (jobStatus.status === 'QUEUED' || jobStatus.status === 'RUNNING') && attempts < maxAttempts) {
-                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        await new Promise(resolve => setTimeout(resolve, 2000)); // Poll less aggressively
                         jobStatus = await getOptimizationStatus(optJob.job_id);
                         attempts++;
                     }
@@ -321,88 +305,62 @@ async function updateDashboardStrategyParamsUI() {
                                     bestParamsTyped[key] = parseInt(value);
                                 } else if (paramConfig && paramConfig.type === 'float') {
                                     bestParamsTyped[key] = parseFloat(value);
-                                } else {
+                                } else { // boolean or string
                                     bestParamsTyped[key] = value;
                                 }
                             }
                             currentSymbolData.strategyParams = bestParamsTyped;
-                        } else {
-                            currentSymbolData.strategyParams = strategyConfig.parameters.reduce((acc, p) => {
-                                acc[p.name] = p.type === 'integer' ? parseInt(p.default) 
-                                            : p.type === 'float' ? parseFloat(p.default) 
-                                            : p.default;
-                                return acc;
-                            }, {}); 
+                        } else { // Fallback to defaults if no best result
+                             currentSymbolData.strategyParams = strategyConfig.parameters.reduce((acc, p) => {
+                                acc[p.name] = p.type === 'integer' ? parseInt(p.default) : p.type === 'float' ? parseFloat(p.default) : p.default; return acc;}, {});
                         }
-                    } else {
+                    } else { // Opt not completed or failed
                         console.warn(`Quick optimization status: ${jobStatus?.status}. Using default strategy params (typed).`);
                         currentSymbolData.strategyParams = strategyConfig.parameters.reduce((acc, p) => {
-                            acc[p.name] = p.type === 'integer' ? parseInt(p.default) 
-                                        : p.type === 'float' ? parseFloat(p.default) 
-                                        : p.default;
-                            return acc;
-                        }, {}); 
+                            acc[p.name] = p.type === 'integer' ? parseInt(p.default) : p.type === 'float' ? parseFloat(p.default) : p.default; return acc; }, {});
                     }
-                } else { 
+                } else {  // Opt job start failed
                     console.warn("Quick optimization job could not be started or failed immediately. Using default strategy params (typed). Job response:", optJob);
                     currentSymbolData.strategyParams = strategyConfig.parameters.reduce((acc, p) => {
-                        acc[p.name] = p.type === 'integer' ? parseInt(p.default) 
-                                    : p.type === 'float' ? parseFloat(p.default) 
-                                    : p.default;
-                        return acc;
-                    }, {}); 
+                         acc[p.name] = p.type === 'integer' ? parseInt(p.default) : p.type === 'float' ? parseFloat(p.default) : p.default; return acc; }, {});
                 }
-            } else { 
+            } else { // No numeric params or no token
                  console.log("No numeric parameters to optimize or no token selected. Using default strategy params (typed).");
                  currentSymbolData.strategyParams = strategyConfig.parameters.reduce((acc, p) => {
-                    acc[p.name] = p.type === 'integer' ? parseInt(p.default) 
-                                : p.type === 'float' ? parseFloat(p.default) 
-                                : p.default;
-                    return acc;
-                }, {}); 
+                    acc[p.name] = p.type === 'integer' ? parseInt(p.default) : p.type === 'float' ? parseFloat(p.default) : p.default; return acc; }, {});
             }
-
         } catch (error) {
             console.error("Error during quick optimization for default params:", error);
             const errorMessage = error.data?.detail || error.data?.message || error.message || (error.statusText ? `${error.status} ${error.statusText}`: "Unknown error during optimization.");
             showModal("Parameter Error", `Could not fetch optimal parameters. Using defaults. Error: ${errorMessage}`);
             currentSymbolData.strategyParams = strategyConfig.parameters.reduce((acc, p) => {
-                acc[p.name] = p.type === 'integer' ? parseInt(p.default) 
-                            : p.type === 'float' ? parseFloat(p.default) 
-                            : p.default;
-                return acc;
-            }, {}); 
+                acc[p.name] = p.type === 'integer' ? parseInt(p.default) : p.type === 'float' ? parseFloat(p.default) : p.default; return acc;}, {});
         } finally {
             const paramsForUI = { ...currentSymbolData.strategyParams }; 
             strategyConfig.parameters.forEach(p => {
                 if (paramsForUI[p.name] === undefined) {
-                    paramsForUI[p.name] = p.type === 'integer' ? parseInt(p.default) 
-                                        : p.type === 'float' ? parseFloat(p.default) 
-                                        : p.default;
+                    paramsForUI[p.name] = p.type === 'integer' ? parseInt(p.default) : p.type === 'float' ? parseFloat(p.default) : p.default;
                 }
-                // Ensure types for UI inputs 
-                if (p.type === 'integer') {
-                     paramsForUI[p.name] = Math.round(parseFloat(paramsForUI[p.name])); // Ensure it's a whole number for UI
-                } else if (p.type === 'float' && typeof paramsForUI[p.name] !== 'number') {
-                     paramsForUI[p.name] = parseFloat(paramsForUI[p.name]);
-                }
+                if (p.type === 'integer') paramsForUI[p.name] = Math.round(parseFloat(paramsForUI[p.name]));
+                else if (p.type === 'float' && typeof paramsForUI[p.name] !== 'number') paramsForUI[p.name] = parseFloat(paramsForUI[p.name]);
             });
-
-            createStrategyParamsInputs(strategyParamsContainer, strategyConfig.parameters, paramsForUI, false);
+            createStrategyParamsInputs(strategyParamsContainer, strategyConfig.parameters, paramsForUI, false); // 'false' for single value inputs
             showLoading(false);
-            await applySettingsToChart();
+            // Automatically apply to chart after params are updated
+            // This makes the dashboard more dynamic. Remove if apply button is strictly required.
+            if(currentSymbolData.token && currentSymbolData.strategyId){
+                 await applySettingsToChart();
+            }
         }
     } else if (strategyParamsContainer) {
         strategyParamsContainer.innerHTML = '<p class="text-sm text-gray-400">Select a strategy to see its parameters.</p>';
-        if (window.chartInstance) clearChart(window.chartInstance);
-        if (chartHeader) chartHeader.textContent = 'Select a strategy.';
+        // Optionally clear chart if strategy becomes invalid or unselected
+        // if (window.chartInstance) clearChart(window.chartInstance);
+        // if (chartHeader) chartHeader.textContent = 'Select strategy and symbol.';
     }
 }
 
 
-/**
- * Applies current selections (symbol, timeframe, strategy, params) to the chart.
- */
 async function applySettingsToChart() {
     if (!window.chartInstance) {
         showModal('Chart Error', 'Chart is not initialized.');
@@ -415,48 +373,40 @@ async function applySettingsToChart() {
     currentSymbolData.symbol = selectedSymbolObj ? selectedSymbolObj.symbol : (symbolSelect.options[symbolSelect.selectedIndex]?.text || currentSymbolData.token);
     
     let apiTimeframe = timeframeSelect.value;
-    if (apiTimeframe === 'day') {
-        apiTimeframe = 'D'; 
-    }
+    if (apiTimeframe === 'day') apiTimeframe = 'D'; 
     currentSymbolData.timeframe = timeframeSelect.value; 
     
     let newStrategyId = strategySelect.value;
-    if (newStrategyId === "" && availableStrategies.length > 0) {
-        newStrategyId = currentSymbolData.strategyId || availableStrategies[0].id; 
+    if (newStrategyId === "" && availableStrategies.length > 0) { // If "None" or empty option selected
+        newStrategyId = currentSymbolData.strategyId || null; // Use stored or null
     }
     currentSymbolData.strategyId = newStrategyId;
 
     const strategyConfig = availableStrategies.find(s => s.id === currentSymbolData.strategyId); 
-    
     const finalStrategyParams = {};
-    if (strategyConfig) {
-        const uiParams = getStrategyParamsValues(strategyConfig.parameters, false);
+
+    if (strategyConfig) { // If a valid strategy is selected
+        const uiParams = getStrategyParamsValues(strategyConfig.parameters, false); // Get from UI
         strategyConfig.parameters.forEach(p_conf => {
             const paramName = p_conf.name;
             let paramValue = uiParams[paramName]; 
 
-            if (paramValue === undefined) { 
+            if (paramValue === undefined || paramValue === "") { // If UI has no value, use stored or default
                 paramValue = currentSymbolData.strategyParams[paramName] !== undefined 
                            ? currentSymbolData.strategyParams[paramName] 
                            : p_conf.default;
             }
-
-            if (p_conf.type === 'integer') {
-                finalStrategyParams[paramName] = parseInt(paramValue);
-            } else if (p_conf.type === 'float') {
-                finalStrategyParams[paramName] = parseFloat(paramValue);
-            } else { 
-                finalStrategyParams[paramName] = paramValue;
-            }
+            // Type casting
+            if (p_conf.type === 'integer') finalStrategyParams[paramName] = parseInt(paramValue);
+            else if (p_conf.type === 'float') finalStrategyParams[paramName] = parseFloat(paramValue);
+            else finalStrategyParams[paramName] = paramValue; // String or boolean
         });
-    } else {
-        Object.assign(finalStrategyParams, currentSymbolData.strategyParams); 
-        if (currentSymbolData.strategyId) { 
-             console.warn(`Strategy config not found for ID: '${currentSymbolData.strategyId}' during applySettingsToChart. Params will be based on currentSymbolData or empty.`);
-        }
+        currentSymbolData.strategyParams = { ...finalStrategyParams }; // Update stored params
+    } else { // No strategy selected or "None"
+        currentSymbolData.strategyParams = {}; // Clear params if no strategy
     }
-
-    const finalStrategyId = currentSymbolData.strategyId && currentSymbolData.strategyId !== "" ? currentSymbolData.strategyId : null;
+    
+    const finalStrategyIdForAPI = (currentSymbolData.strategyId && currentSymbolData.strategyId !== "None" && currentSymbolData.strategyId !== "") ? currentSymbolData.strategyId : null;
     
     if (!currentSymbolData.token) {
         showModal('Input Error', 'Please select a symbol.');
@@ -467,40 +417,27 @@ async function applySettingsToChart() {
 
     showLoading(true);
     chartHeader.textContent = `Loading ${currentSymbolData.symbol || currentSymbolData.token} (${currentSymbolData.timeframe})...`;
-    if (window.chartInstance) clearChart(window.chartInstance);
+    if (window.chartInstance) clearChart(window.chartInstance); // Clear previous series and markers
 
     try {
         const chartRequest = {
             exchange: currentSymbolData.exchange,
             token: currentSymbolData.token,
             timeframe: apiTimeframe, 
-            strategy_id: finalStrategyId, 
-            strategy_params: finalStrategyParams, 
+            strategy_id: finalStrategyIdForAPI, 
+            strategy_params: finalStrategyIdForAPI ? currentSymbolData.strategyParams : {}, 
             start_date: formatDateForAPI(new Date(new Date().setDate(new Date().getDate() - 365))), 
             end_date: formatDateForAPI(new Date())
         };
-        
-        if (chartRequest.strategy_params && chartRequest.strategy_params.fast_ema_period !== undefined) {
-            console.log(`[applySettingsToChart] Pre-API Call - fast_ema_period: ${chartRequest.strategy_params.fast_ema_period}, type: ${typeof chartRequest.strategy_params.fast_ema_period}`);
-        }
-        if (chartRequest.strategy_params && chartRequest.strategy_params.slow_ema_period !== undefined) {
-            console.log(`[applySettingsToChart] Pre-API Call - slow_ema_period: ${chartRequest.strategy_params.slow_ema_period}, type: ${typeof chartRequest.strategy_params.slow_ema_period}`);
-        }
         console.log("[applySettingsToChart] chartRequest payload:", JSON.parse(JSON.stringify(chartRequest))); 
-
 
         const data = await getChartData(chartRequest);
 
         if (data && data.ohlc_data && data.ohlc_data.length > 0) {
             const ohlcForChart = data.ohlc_data.map(d => ({
-                time: formatTimeForLightweightCharts(d.time),
-                open: d.open,
-                high: d.high,
-                low: d.low,
-                close: d.close,
-                volume: d.volume 
+                time: formatTimeForLightweightCharts(d.time), // Expects d.time to be UTC epoch seconds
+                open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume 
             }));
-
             window.candlestickSeries = addOrUpdateCandlestickSeries(window.chartInstance, ohlcForChart);
 
             if (data.indicator_data && Array.isArray(data.indicator_data) && data.indicator_data.length > 0) {
@@ -510,7 +447,7 @@ async function applySettingsToChart() {
                     if (indicatorSeries.name && Array.isArray(indicatorSeries.data)) {
                         let simpleKey = indicatorSeries.name.toLowerCase().replace(/\s*\(.*\)/, '').replace(/\s+/g, '_');
                         transformedIndicatorData[simpleKey] = indicatorSeries.data.map(indPt => ({
-                            time: formatTimeForLightweightCharts(indPt.time), 
+                            time: formatTimeForLightweightCharts(indPt.time), // Expects indPt.time as UTC epoch seconds
                             value: indPt.value
                         }));
                     }
@@ -521,18 +458,16 @@ async function applySettingsToChart() {
             if (data.trade_markers && window.candlestickSeries && data.trade_markers.length > 0) {
                  const markersForChart = data.trade_markers.map(m => ({
                     ...m,
-                    time: formatTimeForLightweightCharts(m.time), 
+                    time: formatTimeForLightweightCharts(m.time), // Expects m.time as UTC epoch seconds
                 }));
                 addTradeMarkers(window.candlestickSeries, markersForChart);
             }
-
             fitChartContent(window.chartInstance);
             chartHeader.textContent = `${data.chart_header_info || (currentSymbolData.symbol + ' (' + currentSymbolData.timeframe + ')')}`;
         } else {
             chartHeader.textContent = `No data available for ${currentSymbolData.symbol || currentSymbolData.token}.`;
             showModal('No Data', `No chart data found for the selected criteria. ${data.message || ''}`);
         }
-
     } catch (error) {
         console.error("Error applying settings to chart:", error);
         chartHeader.textContent = `Error loading chart for ${currentSymbolData.symbol || currentSymbolData.token}.`;

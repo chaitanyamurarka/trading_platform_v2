@@ -185,13 +185,13 @@
                         <div>
                             <label for="timeframeSelect" class="block text-sm font-medium mb-1">Timeframe</label>
                             <select id="timeframeSelect" class="input-field w-full">
-                                <option value="1min">1 Minute</option>
+                                <option value="1min" selected>1 Minute</option>
                                 <option value="3min">3 Minutes</option>
                                 <option value="5min">5 Minutes</option>
                                 <option value="15min">15 Minutes</option>
                                 <option value="30min">30 Minutes</option>
                                 <option value="60min">1 Hour</option>
-                                <option value="day" selected>1 Day</option>
+                                <option value="day">1 Day</option>
                             </select>
                         </div>
                         <div>
@@ -415,7 +415,7 @@
             exchange: 'NSE',
             token: '3045', // TATAMOTORS token (example, will be fetched)
             symbol: 'TATAMOTORS',
-            timeframe: 'day',
+            timeframe: '1',
             strategyId: 'ema_crossover',
             strategyParams: {} // Will be populated
         };
