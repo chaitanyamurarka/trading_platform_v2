@@ -24,12 +24,12 @@ class EMACrossoverStrategy(BaseStrategy):
             description=cls.strategy_description,
             parameters=[
                 StrategyParameter(name="fast_ema_period", label="Fast EMA Period", type="int", default=10, min_value=2, max_value=100, step=1, description="Period for the fast Exponential Moving Average."),
-                StrategyParameter(name="slow_ema_period", label="Slow EMA Period", type="int", default=20, min_value=5, max_value=500, step=1, description="Period for the slow Exponential Moving Average."),
+                StrategyParameter(name="slow_ema_period", label="Slow EMA Period", type="int", default=20, min_value=10, max_value=500, step=10, description="Period for the slow Exponential Moving Average."),
                 StrategyParameter(name="stop_loss_pct", label="Stop Loss %", type="float", 
-                                  default=0.0, min_value=0.0, max_value=0.0, step=0.1, 
+                                  default=0.0, min_value=0.0, max_value=100.0, step=5.0, 
                                   description="Stop loss percentage from entry price. Set to 0 to disable."),
                 StrategyParameter(name="take_profit_pct", label="Take Profit %", type="float", 
-                                   default=0.0, min_value=0.0, max_value=0.0, step=0.1, 
+                                   default=0.0, min_value=0.0, max_value=100.0, step=5.0, 
                                    description="Take profit percentage from entry price. Set to 0 to disable.")
             ]
         )
