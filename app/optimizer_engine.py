@@ -337,15 +337,42 @@ async def _execute_optimization_task(
         job_status_obj.progress = 1.0
         job_status_obj.message = f"Iterative Python optimization completed: {len(all_results)} results (using placeholders)."
 
+
     job_status_obj.end_time = datetime.utcnow()
-    if job_status_obj.status == "COMPLETED": # Ensure status is completed if not failed/cancelled
-        logger.info(f"Optimization job {job_id} finished successfully. Results stored: {len(_optimization_results.get(job_id, []))}")
+    
+    # Calculate duration if start_time is set (i.e., job actually ran past the initial checks)
+    duration_message = ""
+    if hasattr(job_status_obj, 'start_time') and job_status_obj.start_time:
+        duration = job_status_obj.end_time - job_status_obj.start_time
+        duration_message = f"Total optimization task duration: {duration}."
+    else:
+        duration_message = "Total optimization task duration: N/A (task did not reach running phase or start_time was not recorded)."
+
+    if job_status_obj.status == "COMPLETED":
+        # Existing message from Numba path:
+        # job_status_obj.message = f"Numba optimization completed: {len(job_results_list)} results in {total_run_time:.2f}s."
+        # Existing message from Python path:
+        # job_status_obj.message = f"Iterative Python optimization completed: {len(all_results)} results (using placeholders)."
+        
+        # We can enhance the log message here, job_status_obj.message already has specific completion details
+        logger.info(f"Optimization job {job_id} finished successfully. {duration_message} Results stored: {len(_optimization_results.get(job_id, []))}. Original message: {job_status_obj.message}")
+        
         # --- Add to cache if completed successfully ---
         cache_key = _generate_cache_key(request) # 'request' is available from function arguments
         _optimization_cache[cache_key] = _optimization_results[job_id]
         logger.info(f"Optimization results for job {job_id} (key: {cache_key}) stored in cache.")
-    elif job_status_obj.status != "CANCELLED": # Handles FAILED status as well
-         logger.info(f"Optimization job {job_id} finished with status: {job_status_obj.status}.")
+    
+    elif job_status_obj.status == "FAILED":
+        # job_status_obj.message would have been set at the point of failure
+        logger.error(f"Optimization job {job_id} finished with status: FAILED. {duration_message} Message: {job_status_obj.message}")
+    
+    elif job_status_obj.status == "CANCELLED":
+        # job_status_obj.message would have been set when cancellation was processed
+        logger.info(f"Optimization job {job_id} was CANCELLED. {duration_message} Message: {job_status_obj.message if job_status_obj.message else 'Cancellation processed.'}")
+    
+    else: # Other statuses if any
+        logger.info(f"Optimization job {job_id} finished with status: {job_status_obj.status}. {duration_message} Message: {job_status_obj.message if job_status_obj.message else 'Status details not set.'}")
+
 
 
 async def start_optimization_job(
