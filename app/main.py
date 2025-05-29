@@ -285,6 +285,66 @@ async def get_optimization_results_api(job_id: str):
         total_combinations_tested=len(results) if results is not None else 0
     )
 
+# Add this new endpoint function:
+@app.get("/optimize/results/best/{job_id}", response_model=models.OptimizationBestResultResponse, tags=["Optimization"])
+async def get_optimization_best_result_api(job_id: str):
+    logger.debug(f"Request for BEST optimization result for job ID: {job_id}")
+    status = optimizer_engine.get_optimization_job_status(job_id)
+    if not status:
+        logger.warning(f"Optimization job ID '{job_id}' not found for best result.")
+        raise HTTPException(status_code=404, detail=f"Job ID '{job_id}' not found.")
+
+    # Ensure job is in a state where a best result can be determined
+    if status.status not in ["COMPLETED", "CANCELLED"]: # CANCELLED jobs might have partial results
+        logger.warning(f"Job '{job_id}' is {status.status}. Best result can only be determined for COMPLETED or CANCELLED (with results) jobs.")
+        raise HTTPException(status_code=400, detail=f"Job '{job_id}' status is '{status.status}'. Best result available for COMPLETED or CANCELLED jobs with results.")
+
+    original_request = _optimization_requests_store.get(job_id)
+    if not original_request:
+        logger.error(f"Original request for job ID '{job_id}' not found in store for best result.")
+        raise HTTPException(status_code=500, detail=f"Internal error: Original request details for job '{job_id}' missing.")
+
+    best_result_entry: Optional[models.OptimizationResultEntry] = None
+
+    # To find the best result, we typically need to process the individual results,
+    # unless the optimizer_engine stores the best result separately.
+    # Assuming we need to calculate it from the full results list:
+    all_results = optimizer_engine.get_optimization_job_results(job_id)
+
+    if all_results:
+        metric_key = original_request.metric_to_optimize
+        try:
+            valid_results_for_best = [
+                r for r in all_results if isinstance(r.performance_metrics, dict) and
+                metric_key in r.performance_metrics and
+                isinstance(r.performance_metrics.get(metric_key), (int, float))
+            ]
+            if valid_results_for_best:
+                best_result_entry = max(valid_results_for_best, key=lambda r: r.performance_metrics[metric_key])
+            else:
+                logger.warning(f"No valid results found for job {job_id} to determine best using metric '{metric_key}'.")
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Could not determine best result for job {job_id} using metric '{metric_key}': {e}")
+    elif status.status == "COMPLETED":
+        logger.warning(f"Job {job_id} is COMPLETED, but no individual results were found to determine the best one.")
+    elif status.status == "CANCELLED":
+        logger.info(f"Job {job_id} was CANCELLED. Best result might be absent if no results were processed before cancellation.")
+
+    # Prepare summary statistics
+    summary_stats_response = {"status": status.status}
+    if status.message:
+        summary_stats_response["message"] = status.message
+    if best_result_entry is None and status.status == "COMPLETED":
+        summary_stats_response["best_result_message"] = "Best result could not be determined."
+
+
+    return models.OptimizationBestResultResponse(
+        job_id=job_id,
+        strategy_id=original_request.strategy_id,
+        request_details=original_request,
+        best_result=best_result_entry,
+        summary_stats=summary_stats_response
+    )
 
 @app.get("/optimize/results/{job_id}/download", tags=["Optimization"])
 async def download_optimization_results_api(job_id: str):

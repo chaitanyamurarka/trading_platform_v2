@@ -303,3 +303,10 @@ class BacktestResult(BaseModel):
     error_message: Optional[str] = None
     # Include original request parameters for reference if needed
     # request_details: Optional[BacktestRequest] = None
+
+class OptimizationBestResultResponse(BaseModel):
+    job_id: str
+    strategy_id: str
+    request_details: OptimizationRequest  # Assuming OptimizationRequest is already defined
+    best_result: Optional[OptimizationResultEntry] = None  # Assuming OptimizationResultEntry is already defined
+    summary_stats: Dict[str, Any]  # For status like {"status": "COMPLETED"}

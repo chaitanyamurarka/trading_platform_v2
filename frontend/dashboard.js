@@ -466,14 +466,17 @@ async function updateDashboardStrategyParamsUI() {
                         }
 
                         if (jobStatus && jobStatus.status === 'COMPLETED') {
-                            console.log(`[dashboard.js:updateDashboardStrategyParamsUI] Optimization job ${optJob.job_id} COMPLETED. Fetching results.`);
-                            const optResults = await getOptimizationResults(optJob.job_id); //
-                            console.log(`[dashboard.js:updateDashboardStrategyParamsUI] Optimization results for job ${optJob.job_id}:`, optResults ? JSON.parse(JSON.stringify(optResults)) : "No results object");
-                            if (optResults && optResults.best_result && optResults.best_result.parameters) {
+                            console.log(`[dashboard.js:updateDashboardStrategyParamsUI] Optimization job ${optJob.job_id} COMPLETED. Fetching best result.`);
+                            // MODIFIED: Call the new API endpoint for best result only
+                            const bestResultData = await getOptimizationBestResultApi(optJob.job_id); 
+                            console.log(`[dashboard.js:updateDashboardStrategyParamsUI] Best optimization result for job ${optJob.job_id}:`, bestResultData ? JSON.parse(JSON.stringify(bestResultData)) : "No best result object");
+
+                            // Check based on the new bestResultData structure
+                            if (bestResultData && bestResultData.best_result && bestResultData.best_result.parameters) {
                                 const bestParamsTyped = {};
-                                for (const key in optResults.best_result.parameters) {
+                                for (const key in bestResultData.best_result.parameters) {
                                     const paramConfig = strategyConfig.parameters.find(p => p.name === key);
-                                    const value = optResults.best_result.parameters[key];
+                                    const value = bestResultData.best_result.parameters[key];
                                     if (paramConfig) {
                                         if (paramConfig.type === 'integer' || paramConfig.type === 'int') bestParamsTyped[key] = parseInt(value);
                                         else if (paramConfig.type === 'float') bestParamsTyped[key] = parseFloat(value);
@@ -482,12 +485,12 @@ async function updateDashboardStrategyParamsUI() {
                                     } else { bestParamsTyped[key] = value; }
                                 }
                                 currentSymbolData.strategyParams = bestParamsTyped;
-                                console.log("[dashboard.js:updateDashboardStrategyParamsUI] Optimal parameters applied from optimization:", JSON.parse(JSON.stringify(currentSymbolData.strategyParams)));
+                                console.log("[dashboard.js:updateDashboardStrategyParamsUI] Optimal parameters applied from best result:", JSON.parse(JSON.stringify(currentSymbolData.strategyParams)));
                             } else {
-                                 console.warn("[dashboard.js:updateDashboardStrategyParamsUI] Optimization completed but no best_result found or parameters missing. Using defaults. OptResults:", optResults ? JSON.parse(JSON.stringify(optResults.best_result)) : "null");
+                                 console.warn("[dashboard.js:updateDashboardStrategyParamsUI] Optimization completed but no best_result found or parameters missing in best result data. Using defaults. BestResultData:", bestResultData ? JSON.parse(JSON.stringify(bestResultData.best_result)) : "null");
                                  currentSymbolData.strategyParams = strategyConfig.parameters.reduce((acc, p) => {
                                     acc[p.name] = (p.type === 'integer' || p.type === 'int') ? parseInt(p.default) : (p.type === 'float' ? parseFloat(p.default) : (p.type === 'boolean' ? (String(p.default).toLowerCase() === 'true') :p.default)); return acc;}, {});
-                                 console.log("[dashboard.js:updateDashboardStrategyParamsUI] Applied default params due to no best_result:", JSON.parse(JSON.stringify(currentSymbolData.strategyParams)));
+                                 console.log("[dashboard.js:updateDashboardStrategyParamsUI] Applied default params due to no best_result data:", JSON.parse(JSON.stringify(currentSymbolData.strategyParams)));
                             }
                         } else {
                             console.warn(`[dashboard.js:updateDashboardStrategyParamsUI] Optimization did not complete successfully or timed out. Status: ${jobStatus?.status}. Using default strategy params.`);

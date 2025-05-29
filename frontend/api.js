@@ -113,6 +113,15 @@ async function getOptimizationResults(jobId) {
 }
 
 /**
+ * Gets the best result of an optimization job.
+ * @param {string} jobId - The ID of the optimization job.
+ * @returns {Promise<object>} API response (OptimizationBestResultResponse).
+ */
+async function getOptimizationBestResultApi(jobId) { // New function
+    return fetchData(`/optimize/results/best/${jobId}`);
+}
+
+/**
  * Downloads optimization results as CSV.
  * @param {string} jobId - The ID of the optimization job.
  * @returns {Promise<Blob>} CSV data as a Blob.
