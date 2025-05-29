@@ -249,7 +249,7 @@
                                 <label for="backtestStrategySelect" class="block text-sm font-medium mb-1">Strategy</label>
                                 <select id="backtestStrategySelect" class="input-field w-full"></select>
                             </div>
-                             <div>
+                            <div>
                                 <label for="backtestInitialCapital" class="block text-sm font-medium mb-1">Initial Capital</label>
                                 <input type="number" id="backtestInitialCapital" class="input-field w-full" value="100000">
                             </div>
@@ -263,8 +263,8 @@
                             </div>
                         </div>
                         <div id="backtestStrategyParamsContainer" class="mt-6">
-                             <h3 class="text-lg font-semibold text-white mb-3">Strategy Parameters</h3>
-                             <div class="parameter-grid"></div>
+                            <h3 class="text-lg font-semibold text-white mb-3">Strategy Parameters</h3>
+                            <div class="parameter-grid"></div>
                         </div>
                         <button id="runBacktestButton" class="btn btn-primary mt-6">Run Backtest</button>
                     </div>
@@ -272,30 +272,27 @@
                     <div id="backtestResultsContainer" class="hidden space-y-6">
                         <div class="card p-6">
                             <h2 class="text-xl font-semibold text-white mb-4">Performance Summary</h2>
-                            <div id="performanceSummary" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 text-sm"></div>
+                            <div id="performanceSummary">
+                                </div>
                         </div>
                         <div class="card p-1">
-                             <h2 class="text-xl font-semibold text-white mb-2 p-3 text-center">Equity Curve</h2>
-                             <div id="equityCurveChartContainer" style="width: 100%; height: 400px;"></div>
+                            <h2 class="text-xl font-semibold text-white mb-2 p-3 text-center">Equity Curve</h2>
+                            <div id="equityCurveChartContainer" style="width: 100%; height: 400px;"></div>
                         </div>
-                        <div class="card p-1">
-                             <h2 class="text-xl font-semibold text-white mb-2 p-3 text-center">Drawdown Curve</h2>
-                             <div id="drawdownChartContainer" style="width: 100%; height: 300px;"></div>
-                        </div>
+                        
                         <div class="card p-6">
                             <h2 class="text-xl font-semibold text-white mb-4">Trades List</h2>
                             <div class="overflow-x-auto">
-                                <table class="min-w-full">
-                                    <thead class="table-header">
+                                <table class="min-w-full" style="border-collapse: collapse;"> <thead class="table-header">
                                         <tr>
-                                            <th class="px-4 py-2 text-left">Entry Time</th>
-                                            <th class="px-4 py-2 text-left">Type</th>
-                                            <th class="px-4 py-2 text-right">Entry Price</th>
-                                            <th class="px-4 py-2 text-left">Exit Time</th>
-                                            <th class="px-4 py-2 text-right">Exit Price</th>
-                                            <th class="px-4 py-2 text-right">PNL</th>
-                                            <th class="px-4 py-2 text-left">Exit Reason</th>
-                                        </tr>
+                                            <th class="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider border border-gray-600">Entry Time</th>
+                                            <th class="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider border border-gray-600">Type</th>
+                                            <th class="px-4 py-2 text-right text-xs font-medium text-gray-400 uppercase tracking-wider border border-gray-600">Entry Price</th>
+                                            <th class="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider border border-gray-600">Exit Time</th>
+                                            <th class="px-4 py-2 text-right text-xs font-medium text-gray-400 uppercase tracking-wider border border-gray-600">Exit Price</th>
+                                            <th class="px-4 py-2 text-right text-xs font-medium text-gray-400 uppercase tracking-wider border border-gray-600">Quantity</th>
+                                            <th class="px-4 py-2 text-right text-xs font-medium text-gray-400 uppercase tracking-wider border border-gray-600">PNL</th>
+                                            </tr>
                                     </thead>
                                     <tbody id="tradesTableBody"></tbody>
                                 </table>
