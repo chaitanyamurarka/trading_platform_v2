@@ -5,17 +5,15 @@ let currentOptimizationSettings = {
     strategyId: 'ema_crossover', initialCapital: 100000,
     startDate: '', endDate: '', metricToOptimize: 'net_pnl', parameter_ranges: {}
 };
-// optimizationJobId and optimizationStatusInterval are global (from ui.js or main script or declared in index.html)
-// let optimizationJobId = null; // Ensure these are declared if not already
-// let optimizationStatusInterval = null; // Ensure these are declared if not already
-
 
 let optExchangeSelect, optSymbolSelect, optTimeframeSelect, optStrategySelect,
     optInitialCapitalInput, optStartDateInput, optEndDateInput, optMetricSelect,
-    optStrategyParamsGridContainer, // Changed from optStrategyParamsContainer to be more specific
+    optStrategyParamsGridContainer,
     startOptimizationButton, cancelOptimizationButton,
     optimizationStatusContainer, optimizationResultsContainer,
-    optimizationResultsThead, optimizationResultsTbody, downloadCsvButton, bestResultSummaryDiv;
+    // REMOVED: optimizationResultsThead, optimizationResultsTbody
+    downloadCsvButton, // KEPT: downloadCsvButton
+    bestResultSummaryDiv;
 
 async function initOptimizationPage() {
     console.log("DEBUG: Initializing Optimization Page...");
@@ -27,7 +25,6 @@ async function initOptimizationPage() {
     optStartDateInput = document.getElementById('optStartDate');
     optEndDateInput = document.getElementById('optEndDate');
     optMetricSelect = document.getElementById('optMetricSelect');
-    // Get the direct grid container
     const strategyParamsOuterContainer = document.getElementById('optStrategyParamsContainer');
     if (strategyParamsOuterContainer) {
         optStrategyParamsGridContainer = strategyParamsOuterContainer.querySelector('.parameter-grid');
@@ -38,32 +35,28 @@ async function initOptimizationPage() {
     cancelOptimizationButton = document.getElementById('cancelOptimizationButton');
     optimizationStatusContainer = document.getElementById('optimizationStatusContainer');
     optimizationResultsContainer = document.getElementById('optimizationResultsContainer');
-    optimizationResultsThead = document.getElementById('optimizationResultsThead');
-    optimizationResultsTbody = document.getElementById('optimizationResultsTbody');
-    downloadCsvButton = document.getElementById('downloadCsvButton');
+    // REMOVED: initialization of optimizationResultsThead, optimizationResultsTbody
+    // optimizationResultsThead = document.getElementById('optimizationResultsThead');
+    // optimizationResultsTbody = document.getElementById('optimizationResultsTbody');
+    downloadCsvButton = document.getElementById('downloadCsvButton'); // KEPT
     bestResultSummaryDiv = document.getElementById('bestResultSummary');
 
-    // Use global currentOptimizationSettings populated from dashboard/backtest if available
-    // currentSymbolData or currentBacktestSettings might be copied to currentOptimizationSettings by loadPage in index.html
     console.log("DEBUG: currentOptimizationSettings at start of initOptimizationPage:", JSON.stringify(currentOptimizationSettings));
 
-    // Assuming setDefaultDateInputs is defined elsewhere and correctly sets input values
     if (typeof setDefaultDateInputs === 'function') {
-        setDefaultDateInputs(optStartDateInput, optEndDateInput, 365); // Default to 1 year back
+        setDefaultDateInputs(optStartDateInput, optEndDateInput, 365);
         console.log(`DEBUG: After setDefaultDateInputs - optStartDateInput.value: "${optStartDateInput.value}", optEndDateInput.value: "${optEndDateInput.value}"`);
     } else {
         console.error("DEBUG: setDefaultDateInputs function is not defined. Date inputs might not be set correctly.");
     }
 
-
-    currentOptimizationSettings.startDate = optStartDateInput.value; // Update from default
-    currentOptimizationSettings.endDate = optEndDateInput.value; // Update from default
+    currentOptimizationSettings.startDate = optStartDateInput.value;
+    currentOptimizationSettings.endDate = optEndDateInput.value;
     console.log(`DEBUG: currentOptimizationSettings after updating from default dates: startDate: "${currentOptimizationSettings.startDate}", endDate: "${currentOptimizationSettings.endDate}"`);
-
 
     startOptimizationButton.addEventListener('click', runOptimization);
     cancelOptimizationButton.addEventListener('click', handleCancelOptimization);
-    downloadCsvButton.addEventListener('click', handleDownloadCsv);
+    downloadCsvButton.addEventListener('click', handleDownloadCsv); // KEPT
     optExchangeSelect.addEventListener('change', handleOptExchangeChange);
     optSymbolSelect.addEventListener('change', () => {
         currentOptimizationSettings.token = optSymbolSelect.value;
@@ -78,16 +71,14 @@ async function initOptimizationPage() {
     optStartDateInput.addEventListener('change', () => { currentOptimizationSettings.startDate = optStartDateInput.value; console.log(`DEBUG: optStartDateInput changed. StartDate: ${currentOptimizationSettings.startDate}`);});
     optEndDateInput.addEventListener('change', () => { currentOptimizationSettings.endDate = optEndDateInput.value; console.log(`DEBUG: optEndDateInput changed. EndDate: ${currentOptimizationSettings.endDate}`);});
 
-
     showLoading(true);
     try {
         console.log("DEBUG: Before loading strategies. currentOptimizationSettings.strategyId:", currentOptimizationSettings.strategyId);
-        // Ensuring window.availableStrategies is used, assuming it's the global declaration
         if (!window.availableStrategies || window.availableStrategies.length === 0) {
             console.log("DEBUG: Fetching available strategies...");
             const strategiesData = await getAvailableStrategies();
             if (strategiesData && strategiesData.strategies) {
-                 window.availableStrategies = strategiesData.strategies; // Ensure global is updated
+                 window.availableStrategies = strategiesData.strategies;
                  console.log("DEBUG: Strategies fetched:", JSON.stringify(window.availableStrategies));
             } else {
                 window.availableStrategies = [];
@@ -99,36 +90,32 @@ async function initOptimizationPage() {
 
         populateSelect(optStrategySelect, window.availableStrategies, 'id', 'name', currentOptimizationSettings.strategyId);
         if (window.availableStrategies.length > 0 && !currentOptimizationSettings.strategyId) {
-            currentOptimizationSettings.strategyId = window.availableStrategies[0].id; // Default to first if not set
+            currentOptimizationSettings.strategyId = window.availableStrategies[0].id;
             console.log("DEBUG: Defaulted strategyId to first available:", currentOptimizationSettings.strategyId);
         }
-        // Ensure value is actually set if strategyId exists
         if (currentOptimizationSettings.strategyId) {
             optStrategySelect.value = currentOptimizationSettings.strategyId;
         }
         console.log(`DEBUG: optStrategySelect value attempted set to: ${currentOptimizationSettings.strategyId}, actual value: ${optStrategySelect.value}`);
 
-
         const exchanges = [{ id: 'NSE', name: 'NSE' }, { id: 'BSE', name: 'BSE' }, { id: 'NFO', name: 'NFO' }, { id: 'MCX', name: 'MCX' }];
         populateSelect(optExchangeSelect, exchanges, 'id', 'name', currentOptimizationSettings.exchange);
-        optExchangeSelect.value = currentOptimizationSettings.exchange; // Should be fine as it's from a predefined list
+        optExchangeSelect.value = currentOptimizationSettings.exchange;
         console.log(`DEBUG: optExchangeSelect value set to: ${optExchangeSelect.value}`);
 
         console.log(`DEBUG: Calling loadOptSymbols with exchange: ${currentOptimizationSettings.exchange}, token: ${currentOptimizationSettings.token}`);
         await loadOptSymbols(currentOptimizationSettings.exchange, currentOptimizationSettings.token);
         console.log(`DEBUG: After loadOptSymbols. currentToken: ${currentOptimizationSettings.token}, currentSymbol: ${currentOptimizationSettings.symbol}, optSymbolSelect.value: ${optSymbolSelect.value}`);
 
-        // Ensure currentOptimizationSettings has defaults for these properties if not passed
-        currentOptimizationSettings.timeframe = currentOptimizationSettings.timeframe || 'day'; // Or another suitable default
-        currentOptimizationSettings.initialCapital = currentOptimizationSettings.initialCapital !== undefined ? currentOptimizationSettings.initialCapital : 100000; // Default initial capital
-        currentOptimizationSettings.metricToOptimize = currentOptimizationSettings.metricToOptimize || 'net_pnl'; // Default metric
+        currentOptimizationSettings.timeframe = currentOptimizationSettings.timeframe || 'day';
+        currentOptimizationSettings.initialCapital = currentOptimizationSettings.initialCapital !== undefined ? currentOptimizationSettings.initialCapital : 100000;
+        currentOptimizationSettings.metricToOptimize = currentOptimizationSettings.metricToOptimize || 'net_pnl';
 
         optTimeframeSelect.value = currentOptimizationSettings.timeframe;
         optInitialCapitalInput.value = currentOptimizationSettings.initialCapital;
         optMetricSelect.value = currentOptimizationSettings.metricToOptimize;
 
         console.log(`DEBUG: Values before setting date inputs (around original line 93-94) - currentOptimizationSettings.startDate: "${currentOptimizationSettings.startDate}" (Type: ${typeof currentOptimizationSettings.startDate}), currentOptimizationSettings.endDate: "${currentOptimizationSettings.endDate}" (Type: ${typeof currentOptimizationSettings.endDate})`);
-        // Check if date inputs exist before trying to set their value
         if (optStartDateInput) {
             if (currentOptimizationSettings.startDate && typeof currentOptimizationSettings.startDate === 'string') {
                 console.log(`DEBUG: Attempting to set optStartDateInput.value to: "${currentOptimizationSettings.startDate}"`);
@@ -140,7 +127,7 @@ async function initOptimizationPage() {
             console.error("DEBUG: optStartDateInput is null.");
         }
 
-        if (optEndDateInput) { // This is effectively original line 94
+        if (optEndDateInput) {
             if (currentOptimizationSettings.endDate && typeof currentOptimizationSettings.endDate === 'string') {
                 console.log(`DEBUG: Attempting to set optEndDateInput.value to: "${currentOptimizationSettings.endDate}"`);
                 optEndDateInput.value = currentOptimizationSettings.endDate;
@@ -151,7 +138,6 @@ async function initOptimizationPage() {
             console.error("DEBUG: optEndDateInput is null.");
         }
         console.log(`DEBUG: optStartDateInput.value after potential set: "${optStartDateInput ? optStartDateInput.value : 'null'}", optEndDateInput.value after potential set: "${optEndDateInput ? optEndDateInput.value : 'null'}"`);
-
 
         console.log("DEBUG: Calling updateOptStrategyParamsUI...");
         await updateOptStrategyParamsUI();
@@ -166,17 +152,17 @@ async function initOptimizationPage() {
 }
 
 async function loadOptSymbols(exchange, defaultToken = '') {
-    console.log(`DEBUG: loadOptSymbols called with exchange: ${exchange}, defaultToken: ${defaultToken}`); // Added DEBUG
+    // ... (rest of the function remains the same)
+    console.log(`DEBUG: loadOptSymbols called with exchange: ${exchange}, defaultToken: ${defaultToken}`);
     showLoading(true);
     optSymbolSelect.innerHTML = '<option value="">Loading symbols...</option>';
     try {
         const data = await getSymbolsForExchange(exchange);
-        console.log(`DEBUG: Symbols data for ${exchange}:`, data); // Added DEBUG
+        console.log(`DEBUG: Symbols data for ${exchange}:`, data);
         const allSymbols = data.symbols || [];
-        // Broader filter for optimization, can be adjusted
         const filteredSymbols = allSymbols.filter(s => ['EQ', 'INDEX', 'FUTIDX', 'FUTSTK', 'OPTIDX', 'OPTSTK'].includes(s.instrument) || !s.instrument);
         populateSelect(optSymbolSelect, filteredSymbols, 'token', 'trading_symbol', defaultToken || (filteredSymbols.length > 0 ? filteredSymbols[0].token : ''));
-        console.log(`DEBUG: optSymbolSelect populated. Selected value: ${optSymbolSelect.value}`); // Added DEBUG
+        console.log(`DEBUG: optSymbolSelect populated. Selected value: ${optSymbolSelect.value}`);
 
         if (optSymbolSelect.value) {
             currentOptimizationSettings.token = optSymbolSelect.value;
@@ -184,11 +170,9 @@ async function loadOptSymbols(exchange, defaultToken = '') {
             currentOptimizationSettings.symbol = selectedOption ? selectedOption.text : optSymbolSelect.value;
         } else if (defaultToken) {
              currentOptimizationSettings.token = defaultToken;
-             // Ensure the symbol text is also updated if defaultToken was used and found/added
              const selectedSymbolObj = allSymbols.find(s => s.token === defaultToken);
              if(selectedSymbolObj){
                  currentOptimizationSettings.symbol = selectedSymbolObj.trading_symbol;
-                 // If the defaultToken was not in filteredSymbols but now added to select
                  if (!filteredSymbols.some(s => s.token === defaultToken)) {
                     let exists = false;
                     for(let i=0; i < optSymbolSelect.options.length; i++) {
@@ -200,15 +184,15 @@ async function loadOptSymbols(exchange, defaultToken = '') {
                         const opt = document.createElement('option');
                         opt.value = defaultToken;
                         opt.textContent = selectedSymbolObj.trading_symbol;
-                        opt.selected = true; // Select it
+                        opt.selected = true;
                         optSymbolSelect.appendChild(opt);
-                        optSymbolSelect.value = defaultToken; // Ensure select reflects this
+                        optSymbolSelect.value = defaultToken;
                     }
                  } else {
-                    optSymbolSelect.value = defaultToken; // Ensure select reflects this
+                    optSymbolSelect.value = defaultToken;
                  }
              } else {
-                  currentOptimizationSettings.symbol = defaultToken; // Fallback
+                  currentOptimizationSettings.symbol = defaultToken;
              }
         } else if (filteredSymbols.length > 0) {
             optSymbolSelect.value = filteredSymbols[0].token;
@@ -217,9 +201,9 @@ async function loadOptSymbols(exchange, defaultToken = '') {
         } else {
             currentOptimizationSettings.token = '';
             currentOptimizationSettings.symbol = '';
-            console.log("DEBUG: No symbols loaded or selected for exchange:", exchange); // Added DEBUG
+            console.log("DEBUG: No symbols loaded or selected for exchange:", exchange);
         }
-        console.log(`DEBUG: loadOptSymbols finished. Token: ${currentOptimizationSettings.token}, Symbol: ${currentOptimizationSettings.symbol}`); // Added DEBUG
+        console.log(`DEBUG: loadOptSymbols finished. Token: ${currentOptimizationSettings.token}, Symbol: ${currentOptimizationSettings.symbol}`);
     } catch (error) {
         console.error(`DEBUG: Error fetching symbols for optimization ${exchange}:`, error, error.stack);
         showModal('Symbol Error', `Could not load symbols for optimization: ${error.data?.detail || error.message}`);
@@ -230,54 +214,50 @@ async function loadOptSymbols(exchange, defaultToken = '') {
 }
 
 function handleOptExchangeChange() {
-    console.log("DEBUG: handleOptExchangeChange called."); // Added DEBUG
+    // ... (rest of the function remains the same)
+    console.log("DEBUG: handleOptExchangeChange called.");
     currentOptimizationSettings.exchange = optExchangeSelect.value;
-    // Reset token and symbol as they belong to the previous exchange
     currentOptimizationSettings.token = '';
     currentOptimizationSettings.symbol = '';
-    console.log(`DEBUG: Exchange changed to ${currentOptimizationSettings.exchange}. Token/Symbol reset. Calling loadOptSymbols.`); // Added DEBUG
-    loadOptSymbols(currentOptimizationSettings.exchange); // This will update token and symbol
+    console.log(`DEBUG: Exchange changed to ${currentOptimizationSettings.exchange}. Token/Symbol reset. Calling loadOptSymbols.`);
+    loadOptSymbols(currentOptimizationSettings.exchange);
 }
 
 async function updateOptStrategyParamsUI() {
-    console.log("DEBUG: updateOptStrategyParamsUI called."); // Added DEBUG
+    // ... (rest of the function remains the same)
+    console.log("DEBUG: updateOptStrategyParamsUI called.");
     currentOptimizationSettings.strategyId = optStrategySelect.value;
-    console.log(`DEBUG: Strategy ID set to: ${currentOptimizationSettings.strategyId}`); // Added DEBUG
+    console.log(`DEBUG: Strategy ID set to: ${currentOptimizationSettings.strategyId}`);
     const strategyConfig = window.availableStrategies.find(s => s.id === currentOptimizationSettings.strategyId);
 
     if (!optStrategyParamsGridContainer) {
         console.error("DEBUG: optStrategyParamsGridContainer is not found in the DOM for updateOptStrategyParamsUI.");
         return;
     }
-     console.log("DEBUG: optStrategyParamsGridContainer found:", optStrategyParamsGridContainer); // Added DEBUG
+     console.log("DEBUG: optStrategyParamsGridContainer found:", optStrategyParamsGridContainer);
 
     if (strategyConfig && strategyConfig.parameters) {
-        console.log("DEBUG: Strategy config found with parameters:", JSON.stringify(strategyConfig.parameters)); // Added DEBUG
+        console.log("DEBUG: Strategy config found with parameters:", JSON.stringify(strategyConfig.parameters));
         const paramRangesToLoad = {};
         strategyConfig.parameters.forEach(p => {
-            console.log(`DEBUG: Processing parameter for UI: ${p.name}`, p); // Added DEBUG
+            console.log(`DEBUG: Processing parameter for UI: ${p.name}`, p);
             const type = p.type.toLowerCase();
             let defaultVal, stepVal, minVal, maxVal;
 
-            // Determine step value
             if (p.step !== null && p.step !== undefined && parseFloat(p.step) > 0) {
                 stepVal = (type === 'integer' || type === 'int') ? parseInt(p.step) : parseFloat(p.step);
             } else {
-                stepVal = (type === 'integer' || type === 'int') ? 1 : 0.01; // Default step
+                stepVal = (type === 'integer' || type === 'int') ? 1 : 0.01;
             }
-
-            // Determine default value for deriving ranges if min/max are absent
-            // Determine default value for deriving ranges if min/max are absent
-            if (p.default !== null && p.default !== undefined) { // <<<< CORRECTED
-                defaultVal = (type === 'integer' || type === 'int') ? parseInt(p.default) : // <<<< CORRECTED
-                            (type === 'float' ? parseFloat(p.default) : p.default); // <<<< CORRECTED
+            
+            if (p.default !== null && p.default !== undefined) {
+                defaultVal = (type === 'integer' || type === 'int') ? parseInt(p.default) :
+                            (type === 'float' ? parseFloat(p.default) : p.default);
             } else {
-                // Fallback if default is also missing (should not happen for well-defined strategies)
                 defaultVal = (type === 'integer' || type === 'int') ? 10 : 1.0;
                 console.warn(`DEBUG: Parameter ${p.name} missing 'default' property or its value is null/undefined. Using fallback: ${defaultVal}`);
             }
             
-            // Determine min value for the range input
             if (p.min_value !== null && p.min_value !== undefined) {
                 minVal = (type === 'integer' || type === 'int') ? parseInt(p.min_value) : parseFloat(p.min_value);
             } else {
@@ -287,10 +267,9 @@ async function updateOptStrategyParamsUI() {
                  } else if (p.name.toLowerCase().includes('_pct')) {
                     minVal = Math.max(0.01, minVal);
                  }
-                 console.warn(`DEBUG: Parameter ${p.name} missing min_value. Calculated fallback: ${minVal}`); // Added DEBUG
+                 console.warn(`DEBUG: Parameter ${p.name} missing min_value. Calculated fallback: ${minVal}`);
             }
 
-            // Determine max value for the range input
             if (p.max_value !== null && p.max_value !== undefined) {
                 maxVal = (type === 'integer' || type === 'int') ? parseInt(p.max_value) : parseFloat(p.max_value);
             } else {
@@ -298,22 +277,21 @@ async function updateOptStrategyParamsUI() {
                 if (p.name.toLowerCase().includes('_pct')) {
                      maxVal = Math.min(100.0, maxVal);
                 }
-                 console.warn(`DEBUG: Parameter ${p.name} missing max_value. Calculated fallback: ${maxVal}`); // Added DEBUG
+                 console.warn(`DEBUG: Parameter ${p.name} missing max_value. Calculated fallback: ${maxVal}`);
             }
             
-            // Ensure min < max, and step is positive
             if (minVal >= maxVal && minVal != 0 && maxVal != 0) 
                 {
-                 console.warn(`DEBUG: For ${p.name}, initial minVal (${minVal}) >= maxVal (${maxVal}). Adjusting maxVal.`); // Added DEBUG
+                 console.warn(`DEBUG: For ${p.name}, initial minVal (${minVal}) >= maxVal (${maxVal}). Adjusting maxVal.`);
                  maxVal = minVal + stepVal * 5;
                  if (minVal >= maxVal && stepVal > 0) maxVal = minVal + stepVal;
                  else if (minVal >= maxVal) maxVal = minVal + ((type === 'integer' || type === 'int') ? 1 : 0.1);
-                 console.warn(`DEBUG: Adjusted maxVal for ${p.name} to ${maxVal}.`); // Added DEBUG
+                 console.warn(`DEBUG: Adjusted maxVal for ${p.name} to ${maxVal}.`);
             }
              if (stepVal <= 0) {
-                console.warn(`DEBUG: For ${p.name}, initial stepVal (${stepVal}) is <= 0. Adjusting stepVal.`); // Added DEBUG
+                console.warn(`DEBUG: For ${p.name}, initial stepVal (${stepVal}) is <= 0. Adjusting stepVal.`);
                 stepVal = (type === 'integer' || type === 'int') ? 1 : 0.01;
-                console.warn(`DEBUG: Adjusted stepVal for ${p.name} to ${stepVal}.`); // Added DEBUG
+                console.warn(`DEBUG: Adjusted stepVal for ${p.name} to ${stepVal}.`);
             }
 
             paramRangesToLoad[p.name] = {
@@ -322,18 +300,17 @@ async function updateOptStrategyParamsUI() {
                 step: stepVal,
                 default_value: defaultVal
             };
-            console.log(`DEBUG: paramRangesToLoad for ${p.name}:`, paramRangesToLoad[p.name]); // Added DEBUG
+            console.log(`DEBUG: paramRangesToLoad for ${p.name}:`, paramRangesToLoad[p.name]);
         });
-        // Assuming createStrategyParamsInputs is defined elsewhere
         if (typeof createStrategyParamsInputs === 'function') {
-            createStrategyParamsInputs(optStrategyParamsGridContainer, strategyConfig.parameters, paramRangesToLoad, true); // true for range inputs
-            console.log("DEBUG: createStrategyParamsInputs called."); // Added DEBUG
+            createStrategyParamsInputs(optStrategyParamsGridContainer, strategyConfig.parameters, paramRangesToLoad, true);
+            console.log("DEBUG: createStrategyParamsInputs called.");
         } else {
             console.error("DEBUG: createStrategyParamsInputs function is not defined. Parameter inputs cannot be created.");
              optStrategyParamsGridContainer.innerHTML = '<p class="text-sm text-red-500">Error: UI function to create parameter inputs is missing.</p>';
         }
     } else if (optStrategyParamsGridContainer) {
-        console.log("DEBUG: No strategy selected or strategy has no parameters. Clearing params container."); // Added DEBUG
+        console.log("DEBUG: No strategy selected or strategy has no parameters. Clearing params container.");
         optStrategyParamsGridContainer.innerHTML = '<p class="text-sm text-gray-400">Select a strategy to define parameter ranges.</p>';
     }
 }
@@ -343,17 +320,17 @@ async function runOptimization() {
     showLoading(true);
     optimizationStatusContainer.classList.add('hidden');
     optimizationResultsContainer.classList.add('hidden');
-    downloadCsvButton.classList.add('hidden');
+    downloadCsvButton.classList.add('hidden'); // Still hide initially
     if (optimizationStatusInterval) clearInterval(optimizationStatusInterval);
 
-    // Update all settings from UI just before running
+    // ... (rest of parameter collection and validation logic remains the same)
     currentOptimizationSettings.exchange = optExchangeSelect.value;
     currentOptimizationSettings.token = optSymbolSelect.value;
     const selectedOpt = optSymbolSelect.options[optSymbolSelect.selectedIndex];
     currentOptimizationSettings.symbol = selectedOpt ? selectedOpt.text : optSymbolSelect.value;
     currentOptimizationSettings.timeframe = optTimeframeSelect.value;
     currentOptimizationSettings.strategyId = optStrategySelect.value;
-    currentOptimizationSettings.initialCapital = parseFloat(optInitialCapitalInput.value); // Already parsed
+    currentOptimizationSettings.initialCapital = parseFloat(optInitialCapitalInput.value);
     currentOptimizationSettings.startDate = optStartDateInput.value;
     currentOptimizationSettings.endDate = optEndDateInput.value;
     currentOptimizationSettings.metricToOptimize = optMetricSelect.value;
@@ -362,7 +339,6 @@ async function runOptimization() {
     const strategyConfig = window.availableStrategies.find(s => s.id === currentOptimizationSettings.strategyId);
     if (strategyConfig && strategyConfig.parameters) {
         console.log("DEBUG: Strategy config found with parameters:", JSON.stringify(strategyConfig.parameters, null, 2));
-        // Assuming getStrategyParamsValues is defined elsewhere
         if (typeof getStrategyParamsValues === 'function') {
             currentOptimizationSettings.parameter_ranges = getStrategyParamsValues(strategyConfig.parameters, true);
             console.log("DEBUG: parameter_ranges from getStrategyParamsValues:", JSON.stringify(currentOptimizationSettings.parameter_ranges, null, 2));
@@ -397,33 +373,28 @@ async function runOptimization() {
             isNaN(range.min) || isNaN(range.max) || isNaN(range.step) || range.step <= 0 || range.min > range.max) {
             const errorMessage = `Invalid range for ${paramName}. Min: ${range.min} (type: ${typeof range.min}), Max: ${range.max} (type: ${typeof range.max}), Step: ${range.step} (type: ${typeof range.step}). Please check inputs.`;
             console.error("DEBUG: Parameter validation failed:", errorMessage);
-            showModal('Parameter Error', errorMessage); // Show detailed types in modal
+            showModal('Parameter Error', errorMessage);
             showLoading(false);
             return;
         }
     }
     console.log("DEBUG: Parameter validation successful.");
 
-
-    // ... inside runOptimization, after currentOptimizationSettings.parameter_ranges is populated
-
     console.log("DEBUG: Original parameter_ranges from UI/getStrategyParamsValues:", JSON.stringify(currentOptimizationSettings.parameter_ranges, null, 2));
 
-    // Transform parameter_ranges to the list format expected by the API
     const apiParameterRanges = [];
     for (const paramName in currentOptimizationSettings.parameter_ranges) {
         if (Object.hasOwnProperty.call(currentOptimizationSettings.parameter_ranges, paramName)) {
             const rangeDetails = currentOptimizationSettings.parameter_ranges[paramName];
             apiParameterRanges.push({
                 name: paramName,
-                start_value: rangeDetails.min, // Map 'min' to 'start_value'
-                end_value: rangeDetails.max,   // Map 'max' to 'end_value'
+                start_value: rangeDetails.min,
+                end_value: rangeDetails.max,
                 step: rangeDetails.step
             });
         }
     }
     console.log("DEBUG: Transformed apiParameterRanges for request:", JSON.stringify(apiParameterRanges, null, 2));
-
 
     const requestBody = {
         strategy_id: currentOptimizationSettings.strategyId,
@@ -433,19 +404,14 @@ async function runOptimization() {
         end_date: currentOptimizationSettings.endDate,
         timeframe: currentOptimizationSettings.timeframe,
         initial_capital: currentOptimizationSettings.initialCapital,
-        parameter_ranges: apiParameterRanges, // <--- USE THE TRANSFORMED LIST
+        parameter_ranges: apiParameterRanges,
         metric_to_optimize: currentOptimizationSettings.metricToOptimize
     };
-    console.log("DEBUG: Optimization requestBody to be sent:", JSON.stringify(requestBody, null, 2)); // Log the final body
-
-    // Adjust timeframe for API if needed (e.g., 'day' to 'D')
-    // if (requestBody.timeframe === 'day') {
-    // requestBody.timeframe = 'D'; // Uncomment if your backend expects 'D' for daily
-    // }
+    console.log("DEBUG: Optimization requestBody to be sent:", JSON.stringify(requestBody, null, 2));
 
     try {
-        const job = await startOptimization(requestBody); // API call
-        console.log("DEBUG: Optimization Job Started API response:", job); // Added DEBUG
+        const job = await startOptimization(requestBody);
+        console.log("DEBUG: Optimization Job Started API response:", job);
         if (job && job.job_id) {
             optimizationJobId = job.job_id;
             updateOptimizationProgressUI(job);
@@ -455,39 +421,37 @@ async function runOptimization() {
 
             optimizationStatusInterval = setInterval(async () => {
                 try {
-                    // console.log(`DEBUG: Polling status for job_id: ${optimizationJobId}`); // Can be too noisy
                     const status = await getOptimizationStatus(optimizationJobId);
-                    // console.log(`DEBUG: Polled status:`, status); // Can be too noisy
                     updateOptimizationProgressUI(status);
                     if (status.status === 'COMPLETED' || status.status === 'FAILED' || status.status === 'CANCELLED') {
-                        console.log(`DEBUG: Optimization job ${optimizationJobId} ended with status: ${status.status}`); // Added DEBUG
+                        console.log(`DEBUG: Optimization job ${optimizationJobId} ended with status: ${status.status}`);
                         clearInterval(optimizationStatusInterval); optimizationStatusInterval = null;
                         startOptimizationButton.classList.remove('hidden'); cancelOptimizationButton.classList.add('hidden');
                         if (status.status === 'COMPLETED' || (status.status === 'CANCELLED' && status.results_available)) {
                             fetchAndDisplayOptimizationResults(optimizationJobId);
                         } else if (status.status === 'FAILED') {
                             showModal('Optimization Failed', status.message || 'The optimization job failed.');
-                            optimizationResultsContainer.classList.add('hidden');
+                            optimizationResultsContainer.classList.add('hidden'); // Ensure results container is hidden on fail
                         } else {
-                             optimizationResultsContainer.classList.add('hidden');
+                             optimizationResultsContainer.classList.add('hidden'); // Ensure results container is hidden otherwise
                         }
                     }
                 } catch (pollError) {
-                    console.error("DEBUG: Error polling optimization status:", pollError, pollError.stack); // Added DEBUG
+                    console.error("DEBUG: Error polling optimization status:", pollError, pollError.stack);
                     clearInterval(optimizationStatusInterval); optimizationStatusInterval = null;
                     startOptimizationButton.classList.remove('hidden'); cancelOptimizationButton.classList.add('hidden');
                     updateOptimizationProgressUI({ job_id: optimizationJobId, status: 'ERROR', message: 'Failed to poll status.', progress_percentage: 0 });
-                     optimizationResultsContainer.classList.add('hidden');
+                     optimizationResultsContainer.classList.add('hidden'); // Ensure results container is hidden on poll error
                 }
             }, 3000);
         } else {
             const errorMsg = `Failed to start optimization: ${job?.message || job?.detail || 'Unknown error from API'}`;
-            console.error("DEBUG:", errorMsg, "API Response:", job); // Added DEBUG
+            console.error("DEBUG:", errorMsg, "API Response:", job);
             showModal('Optimization Error', errorMsg);
             showLoading(false);
         }
     } catch (error) {
-        console.error("DEBUG: Error starting optimization API call:", error, error.stack); // Added DEBUG
+        console.error("DEBUG: Error starting optimization API call:", error, error.stack);
         showModal('Optimization Start Error', `Failed to start optimization: ${error.data?.detail || error.data?.message || error.message}`);
         showLoading(false);
     }
@@ -495,38 +459,39 @@ async function runOptimization() {
 
 
 async function fetchAndDisplayOptimizationResults(jobId) {
-    console.log(`DEBUG: fetchAndDisplayOptimizationResults called for job ID: ${jobId}`); // Added DEBUG
+    console.log(`DEBUG: fetchAndDisplayOptimizationResults called for job ID: ${jobId}`);
     showLoading(true);
     try {
         const resultsData = await getOptimizationResults(jobId);
-        console.log("DEBUG: Optimization Results Data from API:", JSON.stringify(resultsData, null, 2)); // Added DEBUG
+        console.log("DEBUG: Optimization Results Data from API:", JSON.stringify(resultsData, null, 2));
         if (resultsData && resultsData.results && resultsData.results.length > 0) {
-            let paramKeys = [], metricKeys = [];
-            if (resultsData.results[0].parameters) {
-                paramKeys = Object.keys(resultsData.results[0].parameters);
-            }
-            if (resultsData.results[0].performance_metrics) {
-                metricKeys = Object.keys(resultsData.results[0].performance_metrics);
-            }
-            console.log("DEBUG: paramKeys:", paramKeys, "metricKeys:", metricKeys); // Added DEBUG
+            // REMOVED: Table population logic
+            // let paramKeys = [], metricKeys = [];
+            // if (resultsData.results[0].parameters) {
+            //     paramKeys = Object.keys(resultsData.results[0].parameters);
+            // }
+            // if (resultsData.results[0].performance_metrics) {
+            //     metricKeys = Object.keys(resultsData.results[0].performance_metrics);
+            // }
+            // console.log("DEBUG: paramKeys:", paramKeys, "metricKeys:", metricKeys);
+            // populateOptimizationResultsTable(optimizationResultsTbody, optimizationResultsThead, resultsData.results, paramKeys, metricKeys);
             
-            populateOptimizationResultsTable(optimizationResultsTbody, optimizationResultsThead, resultsData.results, paramKeys, metricKeys);
             displayBestOptimizationResult(bestResultSummaryDiv, resultsData.best_result, resultsData.request_details?.metric_to_optimize || currentOptimizationSettings.metricToOptimize);
-            optimizationResultsContainer.classList.remove('hidden');
-            downloadCsvButton.classList.remove('hidden');
+            optimizationResultsContainer.classList.remove('hidden'); // Show the container for best result and CSV button
+            downloadCsvButton.classList.remove('hidden'); // Show CSV button
         } else if (resultsData && resultsData.message) {
-            console.log("DEBUG: Optimization results API returned a message:", resultsData.message); // Added DEBUG
+            console.log("DEBUG: Optimization results API returned a message:", resultsData.message);
             showModal('Optimization Results', resultsData.message);
             optimizationResultsContainer.classList.add('hidden');
             downloadCsvButton.classList.add('hidden');
         } else {
-            console.log("DEBUG: No results data or an empty result set was returned."); // Added DEBUG
+            console.log("DEBUG: No results data or an empty result set was returned.");
             showModal('Optimization Results', 'No results data or an empty result set was returned for this optimization job.');
             optimizationResultsContainer.classList.add('hidden');
             downloadCsvButton.classList.add('hidden');
         }
     } catch (error) {
-        console.error("DEBUG: Error fetching optimization results:", error, error.stack); // Added DEBUG
+        console.error("DEBUG: Error fetching optimization results:", error, error.stack);
         showModal('Results Error', `Failed to fetch optimization results: ${error.data?.detail || error.data?.message || error.message}`);
         optimizationResultsContainer.classList.add('hidden');
         downloadCsvButton.classList.add('hidden');
@@ -536,16 +501,16 @@ async function fetchAndDisplayOptimizationResults(jobId) {
 }
 
 async function handleCancelOptimization() {
-    console.log("DEBUG: handleCancelOptimization called."); // Added DEBUG
+    console.log("DEBUG: handleCancelOptimization called.");
     if (!optimizationJobId) {
-        console.warn("DEBUG: No active optimization job ID to cancel."); // Added DEBUG
+        console.warn("DEBUG: No active optimization job ID to cancel.");
         showModal('Error', 'No active optimization job to cancel.');
         return;
     }
     showLoading(true);
     try {
-        const response = await cancelOptimization(optimizationJobId); // API call
-        console.log("DEBUG: Cancel optimization API response:", response); // Added DEBUG
+        const response = await cancelOptimization(optimizationJobId);
+        console.log("DEBUG: Cancel optimization API response:", response);
         showModal('Cancel Request', response.message || `Cancellation status: ${response.status}`);
         if (['job_not_found', 'error_cannot_cancel_completed', 'already_completed', 'already_failed', 'cancelled_successfully'].includes(response.status) || response.job_status === 'CANCELLED' || response.job_status === 'FAILED' || response.job_status === 'COMPLETED'  ) {
             if (optimizationStatusInterval) clearInterval(optimizationStatusInterval);
@@ -553,51 +518,52 @@ async function handleCancelOptimization() {
             startOptimizationButton.classList.remove('hidden');
             cancelOptimizationButton.classList.add('hidden');
             if ((response.status === 'cancelled_successfully' || response.job_status === 'CANCELLED') && response.results_available) {
-                 console.log("DEBUG: Cancellation successful, results available. Fetching results."); // Added DEBUG
-                 fetchAndDisplayOptimizationResults(optimizationJobId);
+                 console.log("DEBUG: Cancellation successful, results available. Fetching results to show summary and CSV button.");
+                 fetchAndDisplayOptimizationResults(optimizationJobId); // This will now show best result and CSV button
             } else {
-                optimizationResultsContainer.classList.add('hidden');
+                optimizationResultsContainer.classList.add('hidden'); // Ensure this is hidden if no results to show
+                downloadCsvButton.classList.add('hidden');
             }
         }
     } catch (error) {
-        console.error("DEBUG: Error cancelling optimization API call:", error, error.stack); // Added DEBUG
+        console.error("DEBUG: Error cancelling optimization API call:", error, error.stack);
         showModal('Cancel Error', `Failed to cancel optimization: ${error.data?.detail || error.data?.message || error.message}`);
     } finally {
         showLoading(false);
     }
 }
 
-async function handleDownloadCsv() {
-    console.log("DEBUG: handleDownloadCsv called."); // Added DEBUG
+async function handleDownloadCsv() { // KEPT THIS ENTIRE FUNCTION
+    console.log("DEBUG: handleDownloadCsv called.");
     if (!optimizationJobId) {
-        console.warn("DEBUG: No optimization job ID available to download CSV."); // Added DEBUG
+        console.warn("DEBUG: No optimization job ID available to download CSV.");
         showModal('Error', 'No optimization job ID available to download results.');
         return;
     }
     showLoading(true);
     try {
         const blob = await downloadOptimizationCsv(optimizationJobId); // API call
-        console.log("DEBUG: CSV Blob received:", blob); // Added DEBUG
+        console.log("DEBUG: CSV Blob received:", blob);
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.style.display = 'none'; a.href = url;
         a.download = `optimization_results_${optimizationJobId}.csv`;
         document.body.appendChild(a); a.click();
         window.URL.revokeObjectURL(url); a.remove();
-        console.log("DEBUG: CSV download initiated."); // Added DEBUG
+        console.log("DEBUG: CSV download initiated.");
     } catch (error) {
-        console.error("DEBUG: Error downloading CSV:", error, error.stack); // Added DEBUG
+        console.error("DEBUG: Error downloading CSV:", error, error.stack);
         showModal('Download Error', `Failed to download CSV: ${error.data?.detail || error.data?.message || error.message}`);
     } finally {
         showLoading(false);
     }
 }
 
-// Ensure helper functions like updateOptimizationProgressUI, populateOptimizationResultsTable,
+// Ensure helper functions like updateOptimizationProgressUI,
 // displayBestOptimizationResult, populateSelect, setDefaultDateInputs, showLoading, showModal,
 // createStrategyParamsInputs, getStrategyParamsValues
 // and API call functions (getAvailableStrategies, getSymbolsForExchange, startOptimization, etc.)
 // are defined (likely in ui.js or api.js) and correctly imported/available in the scope.
+// The populateOptimizationResultsTable function is no longer needed.
 
-// Adding a log to indicate the script has been parsed.
 console.log("DEBUG: optimization.js script parsed and executed.");
