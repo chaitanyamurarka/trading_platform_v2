@@ -313,8 +313,14 @@
                             <div>
                                 <label for="optTimeframeSelect" class="block text-sm font-medium mb-1">Timeframe</label>
                                 <select id="optTimeframeSelect" class="input-field w-full">
+                                    <option value="1min">1 Minute</option>
+                                    <option value="3min">3 Minutes</option>
+                                    <option value="5min">5 Minutes</option>
+                                    <option value="15min">15 Minutes</option>
+                                    <option value="30min">30 Minutes</option>
+                                    <option value="60min">1 Hour</option>
                                     <option value="day" selected>1 Day</option>
-                                    </select>
+                                </select>
                             </div>
                             <div>
                                 <label for="optStrategySelect" class="block text-sm font-medium mb-1">Strategy</label>
@@ -339,19 +345,14 @@
                                     <option value="sharpe_ratio">Sharpe Ratio</option>
                                     <option value="win_rate">Win Rate</option>
                                     <option value="profit_factor">Profit Factor</option>
+                                    <option value="max_drawdown">Max Drawdown</option> 
                                 </select>
                             </div>
                         </div>
                         <div id="optStrategyParamsContainer" class="mt-6">
                              <h3 class="text-lg font-semibold text-white mb-3">Optimization Parameter Ranges</h3>
-                             <!-- Example for one param:
-                             <div class="grid grid-cols-3 gap-2 items-center">
-                                 <label class="text-sm">Fast EMA:</label>
-                                 <input type="number" placeholder="Min" class="input-field">
-                                 <input type="number" placeholder="Max" class="input-field">
-                                 <input type="number" placeholder="Step" class="input-field"> (optional)
-                             </div>
-                             -->
+                             <div class="parameter-grid">
+                                 </div>
                         </div>
                         <button id="startOptimizationButton" class="btn btn-primary mt-6">Start Optimization</button>
                         <button id="cancelOptimizationButton" class="btn btn-danger mt-6 hidden">Cancel Optimization</button>
@@ -370,7 +371,7 @@
                     <div id="optimizationResultsContainer" class="hidden card p-6">
                         <div class="flex justify-between items-center mb-4">
                             <h2 class="text-xl font-semibold text-white">Optimization Results</h2>
-                            <button id="downloadCsvButton" class="btn btn-secondary text-sm">Download CSV</button>
+                            <button id="downloadCsvButton" class="btn btn-secondary text-sm hidden">Download CSV</button>
                         </div>
                         <div id="bestResultSummary" class="mb-4 p-3 bg-gray-700 rounded"></div>
                         <div class="overflow-x-auto">
