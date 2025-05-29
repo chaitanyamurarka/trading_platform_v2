@@ -123,15 +123,36 @@ function createStrategyParamsInputs(container, paramsConfig, currentValues = {},
 function getStrategyParamsValues(paramsConfig, isRangeInputs = false) {
     const values = {};
     paramsConfig.forEach(param => {
-        if (isRangeInputs) {
-            const minEl = document.getElementById(`param-${param.name}-min`);
-            const maxEl = document.getElementById(`param-${param.name}-max`);
-            const stepEl = document.getElementById(`param-${param.name}-step`);
-            values[param.name] = {
-                min: param.type === 'integer' ? parseInt(minEl.value) : (param.type === 'float' ? parseFloat(minEl.value) : minEl.value),
-                max: param.type === 'integer' ? parseInt(maxEl.value) : (param.type === 'float' ? parseFloat(maxEl.value) : maxEl.value),
-                step: param.type === 'integer' ? parseInt(stepEl.value) : (param.type === 'float' ? parseFloat(stepEl.value) : stepEl.value),
-            };
+    // Inside getStrategyParamsValues function, in the isRangeInputs block:
+    if (isRangeInputs) {
+        const minEl = document.getElementById(`param-${param.name}-min`);
+        const maxEl = document.getElementById(`param-${param.name}-max`);
+        const stepEl = document.getElementById(`param-${param.name}-step`);
+
+        let minVal, maxVal, stepVal;
+
+        if (param.type === 'integer' || param.type === 'int') {
+            minVal = parseInt(minEl.value);
+            maxVal = parseInt(maxEl.value);
+            stepVal = parseInt(stepEl.value);
+        } else if (param.type === 'float') {
+            minVal = parseFloat(minEl.value);
+            maxVal = parseFloat(maxEl.value);
+            stepVal = parseFloat(stepEl.value);
+        } else { // Default to string if not clearly numeric, though this shouldn't happen for range inputs
+            minVal = minEl.value;
+            maxVal = maxEl.value;
+            stepVal = stepEl.value;
+        }
+
+        // Check for NaN and provide a default or throw error if appropriate
+        // For now, assuming values will be valid numbers or NaN if empty/invalid
+        values[param.name] = {
+            min: minVal,
+            max: maxVal,
+            step: stepVal,
+        };
+ // ... rest of the function
         } else {
             const inputEl = document.getElementById(`param-${param.name}`);
             if (inputEl) {

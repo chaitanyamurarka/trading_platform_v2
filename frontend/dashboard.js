@@ -59,10 +59,35 @@ async function initDashboardPage() {
     });
     goToOptimizeButton.addEventListener('click', () => {
         console.log("[dashboard.js] Go To Optimize button clicked. currentSymbolData:", JSON.parse(JSON.stringify(currentSymbolData)));
-        currentOptimizationSettings = { ...currentSymbolData, strategyParams: { ...currentSymbolData.strategyParams } };
+        // Preserve existing values from currentSymbolData, but ensure necessary defaults for optimization page
+        const defaultOptSettings = { // Define or import global default optimization settings
+            exchange: 'NSE', 
+            token: '', 
+            symbol: '', 
+            timeframe: 'day', 
+            strategyId: '', 
+            initialCapital: 100000, // Default if not set
+            startDate: '', 
+            endDate: '', 
+            metricToOptimize: 'net_pnl', // Default if not set
+            parameter_ranges: {}
+        };
+
+        currentOptimizationSettings = {
+            ...defaultOptSettings, // Start with full defaults
+            ...currentSymbolData, // Override with what dashboard has (exchange, token, symbol, timeframe, strategyId)
+            strategyParams: currentSymbolData.strategyParams ? { ...currentSymbolData.strategyParams } : {}, // Ensure strategyParams is an object
+            // Explicitly ensure initialCapital and metricToOptimize are present
+            initialCapital: currentSymbolData.initialCapital !== undefined ? currentSymbolData.initialCapital : defaultOptSettings.initialCapital,
+            metricToOptimize: currentSymbolData.metricToOptimize !== undefined ? currentSymbolData.metricToOptimize : defaultOptSettings.metricToOptimize,
+        };
+        // Remove strategyParams from the top level if it's meant to be under currentOptimizationSettings.parameter_ranges 
+        // or handled differently by optimization page. If optimization page expects strategy specific params separately, this is fine.
+        // For the error, the key is that currentOptimizationSettings.initialCapital and currentOptimizationSettings.metricToOptimize are set.
+
+        console.log("[dashboard.js] Populated currentOptimizationSettings for Optimize page:", JSON.parse(JSON.stringify(currentOptimizationSettings)));
         loadPage('optimization');
     });
-
     showLoading(true);
     try {
         if (window.chartInstance) {
