@@ -42,8 +42,8 @@ async function initDashboardPage() {
     strategyParamsContainer = document.getElementById('strategyParamsContainer');
     applyChartButton = document.getElementById('applyChartButton');
     chartHeader = document.getElementById('chartHeader');
-    goToBacktestButton = document.getElementById('goToBacktestButton');
-    goToOptimizeButton = document.getElementById('goToOptimizeButton');
+    goToBacktestButton = document.getElementById('nav-backtesting');
+    goToOptimizeButton = document.getElementById('nav-optimization');
 
     console.log("[dashboard.js:initDashboardPage] currentSymbolData at start:", JSON.parse(JSON.stringify(currentSymbolData)));
     timeframeSelect.value = currentSymbolData.timeframe;
