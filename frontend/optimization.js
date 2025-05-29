@@ -457,42 +457,65 @@ async function runOptimization() {
     }
 }
 
-
 async function fetchAndDisplayOptimizationResults(jobId) {
-    console.log(`DEBUG: fetchAndDisplayOptimizationResults called for job ID: ${jobId}`);
+    console.log(`DEBUG: fetchAndDisplayOptimizationResults called for job ID: ${jobId} (using new best result API)`);
     showLoading(true);
     try {
-        const resultsData = await getOptimizationResults(jobId);
-        console.log("DEBUG: Optimization Results Data from API:", JSON.stringify(resultsData, null, 2));
-        if (resultsData && resultsData.results && resultsData.results.length > 0) {
-            // REMOVED: Table population logic
-            // let paramKeys = [], metricKeys = [];
-            // if (resultsData.results[0].parameters) {
-            //     paramKeys = Object.keys(resultsData.results[0].parameters);
-            // }
-            // if (resultsData.results[0].performance_metrics) {
-            //     metricKeys = Object.keys(resultsData.results[0].performance_metrics);
-            // }
-            // console.log("DEBUG: paramKeys:", paramKeys, "metricKeys:", metricKeys);
-            // populateOptimizationResultsTable(optimizationResultsTbody, optimizationResultsThead, resultsData.results, paramKeys, metricKeys);
-            
-            displayBestOptimizationResult(bestResultSummaryDiv, resultsData.best_result, resultsData.request_details?.metric_to_optimize || currentOptimizationSettings.metricToOptimize);
-            optimizationResultsContainer.classList.remove('hidden'); // Show the container for best result and CSV button
-            downloadCsvButton.classList.remove('hidden'); // Show CSV button
-        } else if (resultsData && resultsData.message) {
-            console.log("DEBUG: Optimization results API returned a message:", resultsData.message);
-            showModal('Optimization Results', resultsData.message);
-            optimizationResultsContainer.classList.add('hidden');
-            downloadCsvButton.classList.add('hidden');
+        // Call the new API endpoint that fetches only the best result
+        const bestResultData = await getOptimizationBestResultApi(jobId);
+        console.log("DEBUG: Best Optimization Result Data from API:", JSON.stringify(bestResultData, null, 2));
+
+        if (bestResultData && bestResultData.best_result && bestResultData.best_result.parameters) {
+            // Display the best result using the data from the new API
+            // The structure of best_result itself is expected to be the same.
+            // The new response includes request_details which is a reliable source for metric_to_optimize.
+            displayBestOptimizationResult(
+                bestResultSummaryDiv,
+                bestResultData.best_result,
+                bestResultData.request_details?.metric_to_optimize || currentOptimizationSettings.metricToOptimize
+            );
+            optimizationResultsContainer.classList.remove('hidden'); // Show container for the best result summary
+
+            // The Download CSV button can still be shown.
+            // Its handler `handleDownloadCsv` calls `downloadOptimizationCsv(jobId)`,
+            // which uses its own endpoint `/optimize/results/{job_id}/download`
+            // that fetches all results on the backend for CSV generation.
+            downloadCsvButton.classList.remove('hidden');
+
         } else {
-            console.log("DEBUG: No results data or an empty result set was returned.");
-            showModal('Optimization Results', 'No results data or an empty result set was returned for this optimization job.');
-            optimizationResultsContainer.classList.add('hidden');
-            downloadCsvButton.classList.add('hidden');
+            // Handle cases where best_result is null or the response structure is not as expected
+            let message = 'No best result data was returned for this optimization job.';
+            if (bestResultData && bestResultData.summary_stats) {
+                if (bestResultData.summary_stats.best_result_message) {
+                    message = bestResultData.summary_stats.best_result_message;
+                } else if (bestResultData.summary_stats.message) {
+                    message = bestResultData.summary_stats.message;
+                }
+            } else if (bestResultData && !bestResultData.best_result) {
+                 message = `Optimization job ${jobId} completed, but a specific best result could not be identified from the data.`;
+            }
+
+            console.log("DEBUG: No best result parameters found or issue with data:", message);
+            showModal('Optimization Results', message);
+            optimizationResultsContainer.classList.add('hidden'); // Hide the best result summary area
+
+            // Decide on CSV button visibility based on job status, as we don't have the full results list here.
+            // This ensures CSV can be downloaded if the job did complete or was cancelled with results.
+            try {
+                const jobStatus = await getOptimizationStatus(jobId);
+                if (jobStatus && (jobStatus.status === 'COMPLETED' || (jobStatus.status === 'CANCELLED' && jobStatus.results_available))) {
+                    downloadCsvButton.classList.remove('hidden');
+                } else {
+                    downloadCsvButton.classList.add('hidden');
+                }
+            } catch (statusError) {
+                console.error("DEBUG: Error re-fetching job status for CSV button visibility:", statusError);
+                downloadCsvButton.classList.add('hidden');
+            }
         }
     } catch (error) {
-        console.error("DEBUG: Error fetching optimization results:", error, error.stack);
-        showModal('Results Error', `Failed to fetch optimization results: ${error.data?.detail || error.data?.message || error.message}`);
+        console.error("DEBUG: Error fetching/displaying best optimization result:", error, error.stack);
+        showModal('Results Error', `Failed to fetch or display the best optimization result: ${error.data?.detail || error.data?.message || error.message}`);
         optimizationResultsContainer.classList.add('hidden');
         downloadCsvButton.classList.add('hidden');
     } finally {
