@@ -302,7 +302,8 @@ async function updateOptStrategyParamsUI() {
             }
             
             // Ensure min < max, and step is positive
-            if (minVal >= maxVal) {
+            if (minVal >= maxVal && minVal != 0 && maxVal != 0) 
+                {
                  console.warn(`DEBUG: For ${p.name}, initial minVal (${minVal}) >= maxVal (${maxVal}). Adjusting maxVal.`); // Added DEBUG
                  maxVal = minVal + stepVal * 5;
                  if (minVal >= maxVal && stepVal > 0) maxVal = minVal + stepVal;

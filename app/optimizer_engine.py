@@ -22,7 +22,6 @@ _optimization_jobs: Dict[str, models.OptimizationJobStatus] = {}
 _optimization_results: Dict[str, List[models.OptimizationResultEntry]] = {}
 _optimization_cache: Dict[str, List[models.OptimizationResultEntry]] = {} # Added cache storage
 
-
 # Helper function to create a canonical representation of parameter ranges for cache key
 def _canonical_parameter_ranges_for_cache(parameter_ranges: List[models.OptimizationParameterRange]) -> List[Dict[str, Any]]:
     if not parameter_ranges:
@@ -273,7 +272,6 @@ async def _execute_optimization_task(
             (
                 final_pnl_arr, total_trades_arr, winning_trades_arr, 
                 losing_trades_arr, max_drawdown_arr,
-                # Placeholder variables for detailed outputs not used by optimizer summary
                 _equity_curve_k0, _fast_ema_k0, _slow_ema_k0,
                 _trade_entry_idx_k0, _trade_exit_idx_k0,
                 _trade_entry_px_k0, _trade_exit_px_k0,
@@ -290,13 +288,8 @@ async def _execute_optimization_task(
                 if _optimization_jobs[job_id].status == "CANCELLED":
                     logger.info(f"Optimization job {job_id} cancelled during Numba result processing.")
                     return
-                params_for_this_run = parameter_combinations[k] # These are mapped Numba params
-                # If original param names are needed for results, map them back or use original parameter_combinations list with index k
-                original_params_for_result = {} # Placeholder if different from numba mapped ones.
-                                                # For EMA, the mapped ones are fine for reporting.
-                                                # If general solution, need to access original parameter_combinations[k] used for this iteration k.
-                                                # However, the current logic replaces parameter_combinations if numba is used.
-                                                # For simplicity, we'll use the (potentially mapped) params_for_this_run.
+                params_for_this_run = parameter_combinations[k] 
+                original_params_for_result = {} 
 
                 perf_metrics = {
                     "net_pnl": round(float(final_pnl_arr[k]), 2), "total_trades": int(total_trades_arr[k]),
@@ -326,8 +319,6 @@ async def _execute_optimization_task(
                 return
             job_status_obj.current_iteration = i + 1
             job_status_obj.progress = (i + 1) / total_combinations
-            # This section remains a placeholder for synchronous Python backtesting iteration.
-            # A real implementation would call a synchronous backtesting function here.
             perf_metrics_iter = {"net_pnl": 0, "total_trades": 0, "winning_trades": 0, "losing_trades":0, "max_drawdown_pct": 0, "final_equity": request.initial_capital, "status": "placeholder_python_backtest"}
             if strategy_class.strategy_id != "ema_crossover":
                 logger.warning(f"Job {job_id}: Iterative Python backtest executed for combo {i+1}. Performance calculation placeholder used.")
@@ -340,7 +331,6 @@ async def _execute_optimization_task(
 
     job_status_obj.end_time = datetime.utcnow()
     
-    # Calculate duration if start_time is set (i.e., job actually ran past the initial checks)
     duration_message = ""
     if hasattr(job_status_obj, 'start_time') and job_status_obj.start_time:
         duration = job_status_obj.end_time - job_status_obj.start_time
@@ -349,30 +339,125 @@ async def _execute_optimization_task(
         duration_message = "Total optimization task duration: N/A (task did not reach running phase or start_time was not recorded)."
 
     if job_status_obj.status == "COMPLETED":
-        # Existing message from Numba path:
-        # job_status_obj.message = f"Numba optimization completed: {len(job_results_list)} results in {total_run_time:.2f}s."
-        # Existing message from Python path:
-        # job_status_obj.message = f"Iterative Python optimization completed: {len(all_results)} results (using placeholders)."
-        
-        # We can enhance the log message here, job_status_obj.message already has specific completion details
         logger.info(f"Optimization job {job_id} finished successfully. {duration_message} Results stored: {len(_optimization_results.get(job_id, []))}. Original message: {job_status_obj.message}")
         
-        # --- Add to cache if completed successfully ---
-        cache_key = _generate_cache_key(request) # 'request' is available from function arguments
+        cache_key = _generate_cache_key(request) 
         _optimization_cache[cache_key] = _optimization_results[job_id]
         logger.info(f"Optimization results for job {job_id} (key: {cache_key}) stored in cache.")
     
     elif job_status_obj.status == "FAILED":
-        # job_status_obj.message would have been set at the point of failure
         logger.error(f"Optimization job {job_id} finished with status: FAILED. {duration_message} Message: {job_status_obj.message}")
     
     elif job_status_obj.status == "CANCELLED":
-        # job_status_obj.message would have been set when cancellation was processed
         logger.info(f"Optimization job {job_id} was CANCELLED. {duration_message} Message: {job_status_obj.message if job_status_obj.message else 'Cancellation processed.'}")
     
-    else: # Other statuses if any
+    else: 
         logger.info(f"Optimization job {job_id} finished with status: {job_status_obj.status}. {duration_message} Message: {job_status_obj.message if job_status_obj.message else 'Status details not set.'}")
 
+
+# Helper function to estimate memory 
+def _estimate_optimization_memory(
+    historical_data_points: List[models.OHLCDataPoint],
+    parameter_combinations: List[Dict[str, Any]],
+    strategy_class: Type[BaseStrategy],
+    initial_capital: float,
+    request: models.OptimizationRequest 
+) -> Dict[str, float]:
+    """Estimates memory usage for the optimization task in MB."""
+    mem_estimates_mb = {}
+    bytes_to_mb = 1 / (1024 * 1024)
+    float64_size = 8  # bytes
+    int64_size = 8    # bytes
+    MAX_TRADES_FOR_DETAILED_OUTPUT = 2000 # from numba_kernels.py
+
+    num_data_points = len(historical_data_points)
+    approx_ohlc_object_size_bytes = 150 
+    list_of_objects_mem_bytes = num_data_points * approx_ohlc_object_size_bytes
+    mem_estimates_mb['historical_data_python_list_approx_mb'] = list_of_objects_mem_bytes * bytes_to_mb
+
+    if num_data_points > 0:
+        temp_df_data = []
+        for p in historical_data_points:
+            # item_dict = p.model_dump() # Not needed if accessing attributes directly
+            time_val = p.time
+            if isinstance(p.time, int): # Ensure time is datetime
+                time_val = datetime.fromtimestamp(p.time, tz=timezone.utc)
+            # Construct dict for DataFrame to ensure all expected columns are present for estimation
+            item_dict_for_df = {
+                'time': time_val, 
+                'open': p.open, 'high': p.high, 'low': p.low, 'close': p.close, 
+                'volume': p.volume if hasattr(p, 'volume') else 0.0, # Handle if volume is optional
+                'oi': p.oi if hasattr(p, 'oi') and p.oi is not None else 0.0 # Handle if oi is optional or None
+            }
+            temp_df_data.append(item_dict_for_df)
+        
+        if temp_df_data:
+            temp_df = pd.DataFrame(temp_df_data)
+            if not temp_df.empty:
+                temp_df['time'] = pd.to_datetime(temp_df['time'], errors='coerce')
+                try: # Attempt to set index, skip if problematic (e.g. all times are NaT)
+                    if not temp_df['time'].isnull().all(): # Only set index if time column is usable
+                         temp_df = temp_df.set_index('time')
+                except Exception as e_idx: 
+                    logger.debug(f"Could not set 'time' as index during memory estimation: {e_idx}")
+                    pass 
+                
+                # Ensure numeric conversion for relevant columns
+                for col in ['open', 'high', 'low', 'close', 'volume', 'oi']:
+                    if col not in temp_df.columns: temp_df[col] = 0.0 # Add if missing, with default
+                    temp_df[col] = pd.to_numeric(temp_df[col], errors='coerce')
+                
+                df_mem_bytes = temp_df.memory_usage(deep=True).sum()
+                mem_estimates_mb['historical_data_pandas_df_mb'] = df_mem_bytes * bytes_to_mb
+            else:
+                mem_estimates_mb['historical_data_pandas_df_mb'] = 0.0
+        else:
+            mem_estimates_mb['historical_data_pandas_df_mb'] = 0.0
+    else:
+        mem_estimates_mb['historical_data_pandas_df_mb'] = 0.0
+
+    n_combinations_val = 0
+    if parameter_combinations:
+        if len(parameter_combinations) == 1 and not parameter_combinations[0]: # Handles [{}] case
+            n_combinations_val = 1
+        elif not parameter_combinations: # Handles [] case
+             n_combinations_val = 0
+        else:
+            n_combinations_val = len(parameter_combinations)
+    
+    n_candles_val = num_data_points
+
+    if strategy_class.strategy_id == "ema_crossover":
+        numba_arrays_mem_bytes = 0
+        # Input OHLC NumPy arrays (open_p, high_p, low_p, close_p)
+        numba_arrays_mem_bytes += 4 * n_candles_val * float64_size
+        # Parameter arrays
+        numba_arrays_mem_bytes += 3 * n_combinations_val * int64_size # fast_ema_periods, slow_ema_periods, execution_price_types
+        numba_arrays_mem_bytes += 2 * n_combinations_val * float64_size # stop_loss_pcts, take_profit_pcts
+        # Internal state arrays in Numba kernel
+        numba_arrays_mem_bytes += 12 * n_combinations_val * float64_size # cash_arr, ..., max_drawdown_arr
+        numba_arrays_mem_bytes += 4 * n_combinations_val * int64_size # position_arr, total_trades_arr, ...
+        numba_arrays_mem_bytes += 2 * n_combinations_val * float64_size # k_fast_arr, k_slow_arr
+        
+        mem_estimates_mb['numba_kernel_arrays_mb'] = numba_arrays_mem_bytes * bytes_to_mb
+        mem_estimates_mb['total_estimated_for_numba_path_approx_mb'] = (
+            mem_estimates_mb.get('historical_data_pandas_df_mb', 0.0) +
+            mem_estimates_mb.get('numba_kernel_arrays_mb', 0.0) +
+            mem_estimates_mb.get('historical_data_python_list_approx_mb',0.0)
+        )
+    else: 
+        mem_estimates_mb['total_estimated_for_python_path_approx_mb'] = (
+             mem_estimates_mb.get('historical_data_pandas_df_mb', 0.0) +
+             mem_estimates_mb.get('historical_data_python_list_approx_mb', 0.0)
+        )
+        mem_estimates_mb['python_path_note'] = "Strategy/Portfolio objects not deeply estimated."
+
+    # Results storage estimation
+    avg_result_entry_size_bytes = 350 # Rough estimate per OptimizationResultEntry
+    results_storage_mem_bytes = n_combinations_val * avg_result_entry_size_bytes
+    mem_estimates_mb['optimization_results_storage_for_this_job_approx_mb'] = results_storage_mem_bytes * bytes_to_mb
+    
+    return mem_estimates_mb
 
 
 async def start_optimization_job(
@@ -381,74 +466,78 @@ async def start_optimization_job(
     historical_data_points: List[models.OHLCDataPoint],
     background_tasks: BackgroundTasks
 ) -> models.OptimizationJobStatus:
-    job_id = str(uuid.uuid4()) # Generate job_id early for all paths
+    job_id = str(uuid.uuid4()) 
 
-    # --- Cache Check ---
     cache_key = _generate_cache_key(request)
     if cache_key in _optimization_cache:
         cached_results = _optimization_cache[cache_key]
         logger.info(f"Cache hit for optimization request (key: {cache_key}). Serving job {job_id} from cache.")
         _optimization_results[job_id] = cached_results
         
-        # Determine total_iterations for the status object, reflecting what the original job processed
-        # This involves re-generating combinations to get the count; strategy_class is available.
         parameter_combinations_for_status = _generate_parameter_combinations(request.parameter_ranges, strategy_class)
-        # Handle the case where _generate_parameter_combinations might return [{}] for default runs.
-        # A single empty dict means 1 combination (default). If it's just an empty list, it's 0.
         if not parameter_combinations_for_status or \
            (len(parameter_combinations_for_status) == 1 and not parameter_combinations_for_status[0]):
-            num_combinations_for_status = 0 # No valid combinations would have run
+            num_combinations_for_status = 0 
         else:
             num_combinations_for_status = len(parameter_combinations_for_status)
 
-
-        # Even if cached_results is empty, num_combinations_for_status might be > 0
-        # if the original run generated combinations but all yielded no individual result entries
-        # (e.g. all backtests failed internally or were filtered).
-        # For status, total_iterations should be num_combinations_for_status.
-
         job_status = models.OptimizationJobStatus(
-            job_id=job_id,
-            status="COMPLETED", # Marking as COMPLETED directly
+            job_id=job_id, status="COMPLETED", 
             message=f"Optimization results retrieved from cache. Processed {num_combinations_for_status} combinations.",
-            start_time=datetime.utcnow(), # Simulating immediate completion
-            end_time=datetime.utcnow(),
-            progress=1.0,
-            current_iteration=num_combinations_for_status,
-            total_iterations=num_combinations_for_status,
-            # Optional: Populate these from request for completeness in status, if your model supports it
-            # strategy_id=request.strategy_id,
-            # parameter_ranges_config=request.parameter_ranges,
-            # initial_capital=request.initial_capital,
-            # execution_price_type=request.execution_price_type
+            start_time=datetime.utcnow(), end_time=datetime.utcnow(), progress=1.0,
+            current_iteration=num_combinations_for_status, total_iterations=num_combinations_for_status,
         )
         _optimization_jobs[job_id] = job_status
         return job_status
-    # --- End Cache Check ---
 
-    # If not in cache, proceed with generating parameters and queuing the job
     parameter_combinations = _generate_parameter_combinations(request.parameter_ranges, strategy_class)
-
-    # Check if parameter_combinations is effectively empty (e.g., [{}] from defaults, or actual empty list)
-    # The condition (len == 1 and not combo[0]) checks for the [{}] case.
-    # If it's truly no valid combinations (e.g. an actual empty list from _generate_parameter_combinations),
-    # or the special [{}] which signifies defaults or no params to iterate.
-    # The task _execute_optimization_task also has a check for this.
-    # If combinations are [{}] (default run), total_iterations should be 1.
-    # If combinations are [] (truly no combinations), total_iterations should be 0.
     
+    # --- MEMORY ESTIMATION AND LOGGING ---
+    try:
+        # Ensure initial_capital is float for estimation function
+        initial_cap_for_est = 0.0
+        if request.initial_capital is not None:
+            try:
+                initial_cap_for_est = float(request.initial_capital)
+            except ValueError:
+                logger.warning(f"Could not convert initial_capital '{request.initial_capital}' to float for memory estimation. Using 0.0.")
+        
+        estimated_memory_mb = _estimate_optimization_memory(
+            historical_data_points,
+            parameter_combinations,
+            strategy_class,
+            initial_cap_for_est,
+            request 
+        )
+        logger.info(f"Estimated memory usage for optimization job {job_id}:")
+        for key, value in estimated_memory_mb.items():
+            logger.info(f"  {key}: {value:.2f} MB")
+        
+        total_est_key_numba = 'total_estimated_for_numba_path_approx_mb'
+        total_est_key_python = 'total_estimated_for_python_path_approx_mb'
+
+        if strategy_class.strategy_id == "ema_crossover" and total_est_key_numba in estimated_memory_mb:
+            total_est = estimated_memory_mb[total_est_key_numba]
+            logger.info(f"  ---> Total for Numba Path (approx): {total_est:.2f} MB")
+        elif total_est_key_python in estimated_memory_mb :
+            total_est = estimated_memory_mb[total_est_key_python]
+            logger.info(f"  ---> Total for Python Path (approx): {total_est:.2f} MB")
+
+    except Exception as e:
+        logger.error(f"Error during memory estimation for job {job_id}: {e}", exc_info=True)
+    # --- END MEMORY ESTIMATION ---
+
+
     num_actual_combinations = 0
     if parameter_combinations:
         if len(parameter_combinations) == 1 and not parameter_combinations[0]:
-            # This signifies a "default" run or a run with no specific parameters to vary.
-            # It's still one iteration. If strategy defaults are used, it's one set of defaults.
-            # If _generate_parameter_combinations returns [{}] because no ranges AND no defaults,
-            # this means _execute_optimization_task will run once with effectively no parameters.
-            num_actual_combinations = 1 # It's one attempt, even if with no params or defaults.
+            num_actual_combinations = 1 
+        elif not parameter_combinations: # Actual empty list
+            num_actual_combinations = 0
         else:
             num_actual_combinations = len(parameter_combinations)
 
-    if num_actual_combinations == 0 : # Corrected check: if list is empty (not the [{}] case)
+    if num_actual_combinations == 0 : 
          logger.error(f"No valid parameter combinations generated for '{request.strategy_id}' for job {job_id}. Check ranges and strategy defaults.")
          job_status_fail = models.OptimizationJobStatus(
              job_id=job_id, status="FAILED",
@@ -457,7 +546,6 @@ async def start_optimization_job(
          )
          _optimization_jobs[job_id] = job_status_fail
          return job_status_fail
-
 
     job_status = models.OptimizationJobStatus(
         job_id=job_id, status="QUEUED",
@@ -481,7 +569,7 @@ def get_optimization_job_status(job_id: str) -> Optional[models.OptimizationJobS
 
 def get_optimization_job_results(job_id: str) -> Optional[List[models.OptimizationResultEntry]]:
     job_status = _optimization_jobs.get(job_id)
-    if job_status and job_status.status == "COMPLETED": # This now includes cache hits
+    if job_status and job_status.status == "COMPLETED": 
         return _optimization_results.get(job_id)
     if job_status and job_status.status == "CANCELLED" and job_id in _optimization_results:
         logger.info(f"Fetching partial results for cancelled job {job_id}")
@@ -496,7 +584,7 @@ def cancel_optimization_job(job_id: str) -> Dict[str, str]:
     if job_status.status in ["COMPLETED", "FAILED", "CANCELLED"]:
         return {"status": f"job_already_{job_status.status.lower()}", "job_id": job_id, "message": f"Job is already {job_status.status}."}
 
-    if job_status.status in ["QUEUED", "RUNNING", "PENDING"]: # PENDING might be another initial state
+    if job_status.status in ["QUEUED", "RUNNING", "PENDING"]: 
         job_status.status = "CANCELLED"
         job_status.message = "Job cancellation requested by user."
         job_status.end_time = datetime.utcnow()
@@ -509,9 +597,9 @@ def run_single_ema_crossover_numba_detailed(
     historical_data_points: List[models.OHLCDataPoint],
     strategy_params: Dict[str, Any],
     initial_capital: float,
-    execution_price_type_str: str, # "open" or "close"
-    ohlc_data_df_index: pd.DatetimeIndex # Pass the DatetimeIndex for timestamp mapping
-) -> Tuple[np.ndarray, ...]: # Returns the raw 15-tuple from Numba
+    execution_price_type_str: str, 
+    ohlc_data_df_index: pd.DatetimeIndex 
+) -> Tuple[np.ndarray, ...]: 
     """
     Wrapper to run the Numba kernel for a single EMA Crossover backtest
     with detailed output requested.
@@ -519,14 +607,10 @@ def run_single_ema_crossover_numba_detailed(
     if not historical_data_points:
         raise ValueError("Historical data points list cannot be empty.")
 
-    # 1. Prepare OHLC data as NumPy arrays
-    # Ensure historical_data_points are sorted by time if not already
-    # For consistency, let's build a DataFrame first as done in other places
     ohlc_dicts_for_df = []
     for dp in historical_data_points:
-        # Ensure dp.time is a datetime object (it should be from data_module)
         time_val = dp.time
-        if isinstance(dp.time, int): # If it's a timestamp, convert to datetime
+        if isinstance(dp.time, int): 
             time_val = datetime.fromtimestamp(dp.time, tz=timezone.utc)
         
         ohlc_dicts_for_df.append({
@@ -539,7 +623,7 @@ def run_single_ema_crossover_numba_detailed(
         raise ValueError("DataFrame from historical_data_points is empty.")
         
     df['time'] = pd.to_datetime(df['time'])
-    df = df.set_index('time').sort_index() # Ensure it's sorted by time
+    df = df.set_index('time').sort_index() 
 
     open_p = df['open'].to_numpy(dtype=np.float64)
     high_p = df['high'].to_numpy(dtype=np.float64)
@@ -549,14 +633,7 @@ def run_single_ema_crossover_numba_detailed(
 
     if n_candles == 0:
         raise ValueError("No candles available after processing historical data.")
-
-    # 2. Prepare strategy parameters as 1-element NumPy arrays
-    # Fetch defaults from EMACrossoverStrategy.get_info() if params are missing
-    # This part depends on EMACrossoverStrategy being accessible or passing defaults
-    # For simplicity, we'll assume strategy_params contains the necessary keys
-    # In a more robust setup, you'd fetch defaults from strategy_class.get_info()
     
-    # Default values, assuming EMACrossoverStrategy structure:
     default_fast_ema = 10 
     default_slow_ema = 20
     default_sl_pct = 0.0
@@ -565,8 +642,6 @@ def run_single_ema_crossover_numba_detailed(
     fast_ema_period = int(float(strategy_params.get("fast_ema_period", default_fast_ema)))
     slow_ema_period = int(float(strategy_params.get("slow_ema_period", default_slow_ema)))
     
-    # SL/TP percentages from strategy_params are raw percentages (e.g., 2 for 2%)
-    # Convert to decimal for Numba kernel (e.g., 0.02)
     stop_loss_pct = float(strategy_params.get("stop_loss_pct", default_sl_pct)) / 100.0
     take_profit_pct = float(strategy_params.get("take_profit_pct", default_tp_pct)) / 100.0
 
@@ -580,7 +655,6 @@ def run_single_ema_crossover_numba_detailed(
 
     n_combinations = 1
 
-    # 3. Call the Numba kernel
     logger.info(f"Calling Numba kernel for single detailed backtest: FastEMA={fast_ema_period}, SlowEMA={slow_ema_period}, SL={stop_loss_pct*100}%, TP={take_profit_pct*100}%, Exec={execution_price_type_str}")
     
     numba_results_tuple = run_ema_crossover_optimization_numba(
@@ -589,8 +663,8 @@ def run_single_ema_crossover_numba_detailed(
         stop_loss_pcts_arr, take_profit_pcts_arr,
         execution_price_types_arr,
         initial_capital,
-        n_combinations, # Should be 1
+        n_combinations, 
         n_candles,
         detailed_output_requested=True
     )
-    return numba_results_tuple # This is the 15-element tuple
+    return numba_results_tuple
