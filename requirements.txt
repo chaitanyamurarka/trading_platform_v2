@@ -9,3 +9,4 @@ websocket
 requests
 aiofiles
 numba
+mysql-connector-python
