@@ -113,9 +113,10 @@ async def health_check():
 
 @app.get("/symbols/{exchange}", response_model=models.AvailableSymbolsResponse)
 async def list_available_symbols(exchange: str):
+    # ... (symbol listing logic remains the same)
     try:
-        symbols = data_module.get_available_symbols(exchange.upper())
-        return JSONResponse(content={"symbols": symbols})
+        response = await data_module.get_available_symbols(exchange.upper())
+        return response
     except FileNotFoundError:
         logger.warning(f"Scripmaster not found for exchange: {exchange.upper()}")
         raise HTTPException(status_code=404, detail=f"Scripmaster for exchange '{exchange.upper()}' not found.")
