@@ -1,6 +1,159 @@
 // chartSetup.js
 
 /**
+ * Calculates the standard deviation of an array of numbers.
+ * @param {number[]} arr - Array of numbers.
+ * @returns {number} Standard deviation.
+ */
+function standardDeviation(arr) {
+    const n = arr.length;
+    if (n === 0) return 0;
+    const mean = arr.reduce((a, b) => a + b, 0) / n;
+    const variance = arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
+    return Math.sqrt(variance);
+}
+
+/**
+ * Calculates and plots a linear regression channel with filled areas.
+ * @param {object} chart - The chart instance.
+ * @param {Array} ohlcData - The OHLC data array.
+ * @param {number} period - Number of recent candles for regression (e.g., 10).
+ * @param {string} sourceField - Field in ohlcData to use for source (e.g., 'close').
+ * @param {number} upperMultiplier - Multiplier for std deviation for upper channel.
+ * @param {number} lowerMultiplier - Multiplier for std deviation for lower channel.
+ * @param {string} upperFillColor - RGBA color for the upper fill.
+ * @param {string} lowerFillColor - RGBA color for the lower fill.
+ * @param {string} centralLineColor - Color of the central regression line.
+ * @param {string} upperLineColor - Color of the upper channel line.
+ * @param {string} lowerLineColor - Color of the lower channel line.
+ * @param {number} lineWidth - Line width for channel lines.
+ */
+function addLinearRegressionChannel(
+    chart,
+    ohlcData,
+    period = 10,
+    sourceField = 'close',
+    upperMultiplier = 2.0, // Matches default from PineScript example
+    lowerMultiplier = 2.0, // Matches default from PineScript example
+    upperFillColor = 'rgba(0, 120, 255, 0.15)', // Blueish, semi-transparent
+    lowerFillColor = 'rgba(255, 0, 0, 0.15)',   // Reddish, semi-transparent
+    centralLineColor = '#FFA500', // Orange
+    upperLineColor = '#42A5F5',   // Lighter Blue
+    lowerLineColor = '#EF5350',   // Lighter Red
+    lineWidth = 1
+) {
+    if (!chart || !ohlcData || ohlcData.length < period) {
+        console.warn("Linear Regression Channel: Not enough data or chart not available.");
+        return;
+    }
+
+    // --- 1. Clean up previous channel series ---
+    if (window.regressionChannelGroup) {
+        window.regressionChannelGroup.forEach(series => {
+            try { chart.removeSeries(series); } catch (e) { /* ignore */ }
+        });
+    }
+    window.regressionChannelGroup = [];
+
+    // --- 2. Prepare data ---
+    const recentData = ohlcData.slice(-period);
+    const sourceValues = recentData.map(d => d[sourceField]);
+    const xValues = recentData.map((_, i) => i); // Index 0 to period-1
+
+    // --- 3. Calculate Linear Regression for the central line ---
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    const n = xValues.length;
+
+    for (let i = 0; i < n; i++) {
+        sumX += xValues[i];
+        sumY += sourceValues[i];
+        sumXY += xValues[i] * sourceValues[i];
+        sumXX += xValues[i] * xValues[i];
+    }
+
+    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+    const intercept = (sumY - slope * sumX) / n;
+
+    // Central line points
+    const centralStartPrice = intercept; // At x = 0 (first point in recentData)
+    const centralEndPrice = slope * (n - 1) + intercept; // At x = n-1 (last point in recentData)
+
+    const startTime = recentData[0].time;
+    const endTime = recentData[n - 1].time;
+
+    const centralLineData = [
+        { time: startTime, value: centralStartPrice },
+        { time: endTime, value: centralEndPrice }
+    ];
+
+    // --- 4. Calculate Standard Deviation and Channel Offsets ---
+    const stdDev = standardDeviation(sourceValues);
+    const upperDeviation = stdDev * upperMultiplier;
+    const lowerDeviation = stdDev * lowerMultiplier;
+
+    // Upper channel line points
+    const upperChannelData = [
+        { time: startTime, value: centralStartPrice + upperDeviation },
+        { time: endTime, value: centralEndPrice + upperDeviation }
+    ];
+
+    // Lower channel line points
+    const lowerChannelData = [
+        { time: startTime, value: centralStartPrice - lowerDeviation },
+        { time: endTime, value: centralEndPrice - lowerDeviation }
+    ];
+
+    // --- 5. Add Series (Fills first, then lines for visibility) ---
+    // Chart background color needed for "erasing" parts of fills
+    // Assuming your chart background is '#111827' as per initChart
+    const chartBackgroundColor = chart.options().layout.backgroundColor || '#111827';
+
+    // Helper to create area series for fills
+    const createArea = (data, color, baseValueType) => {
+        const series = chart.addAreaSeries({
+            lineColor: 'transparent', // No border line for the fill itself
+            topColor: color,
+            bottomColor: color, // Solid fill
+            lineWidth: 0,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            // baseValue: baseValueType ? { type: baseValueType, price: 0 } : undefined
+        });
+        series.setData(data);
+        window.regressionChannelGroup.push(series);
+        return series;
+    };
+    
+    // Order of adding is important for layering effect:
+    // Fill between Upper and Central
+    createArea(upperChannelData, upperFillColor);
+    createArea(centralLineData, chartBackgroundColor); // This "cuts" the fill above
+
+    // Fill between Central and Lower
+    createArea(centralLineData, lowerFillColor);
+    createArea(lowerChannelData, chartBackgroundColor); // This "cuts" the fill above
+
+    // Add the actual lines on top
+    const centralSeries = chart.addLineSeries({
+        color: centralLineColor, lineWidth: lineWidth, lastValueVisible: false, priceLineVisible: false,
+    });
+    centralSeries.setData(centralLineData);
+    window.regressionChannelGroup.push(centralSeries);
+
+    const upperSeries = chart.addLineSeries({
+        color: upperLineColor, lineWidth: lineWidth, lastValueVisible: false, priceLineVisible: false,
+    });
+    upperSeries.setData(upperChannelData);
+    window.regressionChannelGroup.push(upperSeries);
+
+    const lowerSeries = chart.addLineSeries({
+        color: lowerLineColor, lineWidth: lineWidth, lastValueVisible: false, priceLineVisible: false,
+    });
+    lowerSeries.setData(lowerChannelData);
+    window.regressionChannelGroup.push(lowerSeries);
+}
+
+/**
  * Calculates and plots a linear regression line for the last N candles.
  * @param {object} chart - The chart instance.
  * @param {Array} ohlcData - The OHLC data array.
@@ -145,18 +298,17 @@ function addOrUpdateCandlestickSeries(chart, ohlcData) { // ohlcData.time is UTC
         borderDownColor: '#ef4444', borderUpColor: '#22c55e',
         wickDownColor: '#ef4444', wickUpColor: '#22c55e',
     });
-    window.candlestickSeries.setData(ohlcData); // Timestamps are UTC epoch seconds
+    window.candlestickSeries.setData(ohlcData);
 
-    // --- ADD THIS LINE ---
-    // Plot linear regression for the last 10 candles
-    if (ohlcData && ohlcData.length > 0) { // Ensure ohlcData is available
-        addLinearRegressionLine(chart, ohlcData, 10);
+    // --- REPLACE OLD REGRESSION CALL WITH THIS ---
+    if (ohlcData && ohlcData.length > 0) {
+        addLinearRegressionChannel(chart, ohlcData, 10, 'close'); // Using 10 periods, close price
+                                                                // You can adjust multipliers and colors here or pass them as args
     }
-    // --- END OF ADDED LINE ---
+    // --- END OF MODIFIED SECTION ---
 
     return window.candlestickSeries;
 }
-
 function clearChart(chart) {
     if (!chart) return;
     if (window.candlestickSeries) {
@@ -169,14 +321,19 @@ function clearChart(chart) {
         }
         window.indicatorSeries = {};
     }
-    // --- ADD THIS ---
-    if (window.regressionLineSeries) {
-        try { chart.removeSeries(window.regressionLineSeries); } catch (e) { /* ignore */ }
+    // --- ADD/MODIFY THIS ---
+    if (window.regressionChannelGroup) {
+        window.regressionChannelGroup.forEach(series => {
+            try { chart.removeSeries(series); } catch (e) { /* ignore */ }
+        });
+        window.regressionChannelGroup = []; // Reset the array
+    }
+    if (window.regressionLineSeries) { // If you still have the old single line series reference
+        try { chart.removeSeries(window.regressionLineSeries); } catch(e) { /*ignore*/ }
         window.regressionLineSeries = null;
     }
-    // --- END OF ADDED CODE ---
+    // --- END OF ADDED/MODIFIED CODE ---
 }
-
 function addOrUpdateIndicatorSeries(chart, indicatorData, indicatorColors = {}) { // indicatorData values are {time: UTC_epoch_seconds, value: ...}
     if (!chart || !indicatorData) return;
     if (window.indicatorSeries) {
