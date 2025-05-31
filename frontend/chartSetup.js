@@ -1,6 +1,64 @@
 // chartSetup.js
 
 /**
+ * Calculates and plots a linear regression line for the last N candles.
+ * @param {object} chart - The chart instance.
+ * @param {Array} ohlcData - The OHLC data array.
+ * @param {number} period - The number of recent candles to use for regression (e.g., 10).
+ * @param {string} [color='#FFA500'] - Color of the regression line.
+ * @param {number} [lineWidth=2] - Line width of the regression line.
+ */
+function addLinearRegressionLine(chart, ohlcData, period = 10, color = '#FFA500', lineWidth = 2) {
+    if (!chart || !ohlcData || ohlcData.length < period) {
+        console.warn("Linear Regression: Not enough data or chart not available.");
+        return;
+    }
+
+    // Get the last 'period' data points
+    const recentData = ohlcData.slice(-period);
+
+    // For simplicity, let's use the closing prices for regression
+    // And map time to a simple index (0, 1, 2, ...) for calculation
+    const yValues = recentData.map(d => d.close);
+    const xValues = recentData.map((_, i) => i);
+
+    // Calculate linear regression (slope 'm' and intercept 'b' for y = mx + b)
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    const n = xValues.length;
+
+    for (let i = 0; i < n; i++) {
+        sumX += xValues[i];
+        sumY += yValues[i];
+        sumXY += xValues[i] * yValues[i];
+        sumXX += xValues[i] * xValues[i];
+    }
+
+    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+    const intercept = (sumY - slope * sumX) / n;
+
+    // Determine the start and end points for the line on the chart
+    // The line will span from the first candle of the 'recentData' to the last one.
+    const regressionLineData = [
+        { time: recentData[0].time, value: slope * xValues[0] + intercept }, // Start point
+        { time: recentData[n - 1].time, value: slope * xValues[n - 1] + intercept } // End point
+    ];
+
+    // Remove previous regression line if it exists
+    if (window.regressionLineSeries) {
+        try { chart.removeSeries(window.regressionLineSeries); } catch (e) { /* ignore */ }
+    }
+
+    // Add the new line series for the regression line
+    window.regressionLineSeries = chart.addLineSeries({
+        color: color,
+        lineWidth: lineWidth,
+        lastValueVisible: false, // Optional: hide the price label on the price scale
+        priceLineVisible: false, // Optional: hide the price line that follows the last value
+    });
+    window.regressionLineSeries.setData(regressionLineData);
+}
+
+/**
  * Initializes the Lightweight Chart with IST localization for time scale.
  * @param {string} containerId - The ID of the HTML element to contain the chart.
  * @returns {object} The chart instance.
@@ -88,7 +146,35 @@ function addOrUpdateCandlestickSeries(chart, ohlcData) { // ohlcData.time is UTC
         wickDownColor: '#ef4444', wickUpColor: '#22c55e',
     });
     window.candlestickSeries.setData(ohlcData); // Timestamps are UTC epoch seconds
+
+    // --- ADD THIS LINE ---
+    // Plot linear regression for the last 10 candles
+    if (ohlcData && ohlcData.length > 0) { // Ensure ohlcData is available
+        addLinearRegressionLine(chart, ohlcData, 10);
+    }
+    // --- END OF ADDED LINE ---
+
     return window.candlestickSeries;
+}
+
+function clearChart(chart) {
+    if (!chart) return;
+    if (window.candlestickSeries) {
+        try { chart.removeSeries(window.candlestickSeries); } catch (e) { /* ignore */ }
+        window.candlestickSeries = null;
+    }
+    if (window.indicatorSeries) {
+        for (const key in window.indicatorSeries) {
+            try { chart.removeSeries(window.indicatorSeries[key]); } catch (e) { /* ignore */ }
+        }
+        window.indicatorSeries = {};
+    }
+    // --- ADD THIS ---
+    if (window.regressionLineSeries) {
+        try { chart.removeSeries(window.regressionLineSeries); } catch (e) { /* ignore */ }
+        window.regressionLineSeries = null;
+    }
+    // --- END OF ADDED CODE ---
 }
 
 function addOrUpdateIndicatorSeries(chart, indicatorData, indicatorColors = {}) { // indicatorData values are {time: UTC_epoch_seconds, value: ...}
