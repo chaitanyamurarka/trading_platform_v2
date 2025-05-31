@@ -1,479 +1,518 @@
 // chartSetup.js
 
 /**
- * Calculates the standard deviation of an array of numbers.
- * @param {number[]} arr - Array of numbers.
- * @returns {number} Standard deviation.
- */
-function standardDeviation(arr) {
-    const n = arr.length;
-    if (n === 0) return 0;
-    const mean = arr.reduce((a, b) => a + b, 0) / n;
-    const variance = arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
-    return Math.sqrt(variance);
-}
-
-/**
- * Calculates and plots a linear regression channel with filled areas.
- * @param {object} chart - The chart instance.
- * @param {Array} ohlcData - The OHLC data array.
- * @param {number} period - Number of recent candles for regression (e.g., 10).
- * @param {string} sourceField - Field in ohlcData to use for source (e.g., 'close').
- * @param {number} upperMultiplier - Multiplier for std deviation for upper channel.
- * @param {number} lowerMultiplier - Multiplier for std deviation for lower channel.
- * @param {string} upperFillColor - RGBA color for the upper fill.
- * @param {string} lowerFillColor - RGBA color for the lower fill.
- * @param {string} centralLineColor - Color of the central regression line.
- * @param {string} upperLineColor - Color of the upper channel line.
- * @param {string} lowerLineColor - Color of the lower channel line.
- * @param {number} lineWidth - Line width for channel lines.
- */
-function addLinearRegressionChannel(
-    chart,
-    ohlcData,
-    period = 10,
-    sourceField = 'close',
-    upperMultiplier = 2.0, // Matches default from PineScript example
-    lowerMultiplier = 2.0, // Matches default from PineScript example
-    upperFillColor = 'rgba(0, 120, 255, 0.15)', // Blueish, semi-transparent
-    lowerFillColor = 'rgba(255, 0, 0, 0.15)',   // Reddish, semi-transparent
-    centralLineColor = '#FFA500', // Orange
-    upperLineColor = '#42A5F5',   // Lighter Blue
-    lowerLineColor = '#42A5F5',   // Lighter Red
-    lineWidth = 1
-) {
-    if (!chart || !ohlcData || ohlcData.length < period) {
-        console.warn("Linear Regression Channel: Not enough data or chart not available.");
-        return;
-    }
-
-    // --- 1. Clean up previous channel series ---
-    if (window.regressionChannelGroup) {
-        window.regressionChannelGroup.forEach(series => {
-            try { chart.removeSeries(series); } catch (e) { /* ignore */ }
-        });
-    }
-    window.regressionChannelGroup = [];
-
-    // --- 2. Prepare data ---
-    const recentData = ohlcData.slice(-period);
-    const sourceValues = recentData.map(d => d[sourceField]);
-    const xValues = recentData.map((_, i) => i); // Index 0 to period-1
-
-    // --- 3. Calculate Linear Regression for the central line ---
-    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-    const n = xValues.length;
-
-    for (let i = 0; i < n; i++) {
-        sumX += xValues[i];
-        sumY += sourceValues[i];
-        sumXY += xValues[i] * sourceValues[i];
-        sumXX += xValues[i] * xValues[i];
-    }
-
-    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-    const intercept = (sumY - slope * sumX) / n;
-
-    // Central line points
-    const centralStartPrice = intercept; // At x = 0 (first point in recentData)
-    const centralEndPrice = slope * (n - 1) + intercept; // At x = n-1 (last point in recentData)
-
-    const startTime = recentData[0].time;
-    const endTime = recentData[n - 1].time;
-
-    const centralLineData = [
-        { time: startTime, value: centralStartPrice },
-        { time: endTime, value: centralEndPrice }
-    ];
-
-    // --- 4. Calculate Standard Deviation and Channel Offsets ---
-    const stdDev = standardDeviation(sourceValues);
-    const upperDeviation = stdDev * upperMultiplier;
-    const lowerDeviation = stdDev * lowerMultiplier;
-
-    // Upper channel line points
-    const upperChannelData = [
-        { time: startTime, value: centralStartPrice + upperDeviation },
-        { time: endTime, value: centralEndPrice + upperDeviation }
-    ];
-
-    // Lower channel line points
-    const lowerChannelData = [
-        { time: startTime, value: centralStartPrice - lowerDeviation },
-        { time: endTime, value: centralEndPrice - lowerDeviation }
-    ];
-
-    // --- 5. Add Series (Fills first, then lines for visibility) ---
-    // Chart background color needed for "erasing" parts of fills
-    // Assuming your chart background is '#111827' as per initChart
-    const chartBackgroundColor = chart.options().layout.backgroundColor || '#111827';
-
-    // Helper to create area series for fills
-    const createArea = (data, color, baseValueType) => {
-        const series = chart.addAreaSeries({
-            lineColor: 'transparent', // No border line for the fill itself
-            topColor: color,
-            bottomColor: color, // Solid fill
-            lineWidth: 0,
-            lastValueVisible: false,
-            priceLineVisible: false,
-            // baseValue: baseValueType ? { type: baseValueType, price: 0 } : undefined
-        });
-        series.setData(data);
-        window.regressionChannelGroup.push(series);
-        return series;
-    };
-    
-    // Order of adding is important for layering effect:
-    // Fill between Upper and Central
-    createArea(upperChannelData, upperFillColor);
-    createArea(centralLineData, chartBackgroundColor); // This "cuts" the fill above
-
-    // Fill between Central and Lower
-    createArea(centralLineData, lowerFillColor);
-    createArea(lowerChannelData, chartBackgroundColor); // This "cuts" the fill above
-
-    // Add the actual lines on top
-    const centralSeries = chart.addLineSeries({
-        color: centralLineColor, lineWidth: lineWidth, lastValueVisible: false, priceLineVisible: false,
-    });
-    centralSeries.setData(centralLineData);
-    window.regressionChannelGroup.push(centralSeries);
-
-    const upperSeries = chart.addLineSeries({
-        color: upperLineColor, lineWidth: lineWidth, lastValueVisible: false, priceLineVisible: false,
-    });
-    upperSeries.setData(upperChannelData);
-    window.regressionChannelGroup.push(upperSeries);
-
-    const lowerSeries = chart.addLineSeries({
-        color: lowerLineColor, lineWidth: lineWidth, lastValueVisible: false, priceLineVisible: false,
-    });
-    lowerSeries.setData(lowerChannelData);
-    window.regressionChannelGroup.push(lowerSeries);
-}
-
-/**
- * Calculates and plots a linear regression line for the last N candles.
- * @param {object} chart - The chart instance.
- * @param {Array} ohlcData - The OHLC data array.
- * @param {number} period - The number of recent candles to use for regression (e.g., 10).
- * @param {string} [color='#FFA500'] - Color of the regression line.
- * @param {number} [lineWidth=2] - Line width of the regression line.
- */
-function addLinearRegressionLine(chart, ohlcData, period = 10, color = '#FFA500', lineWidth = 2) {
-    if (!chart || !ohlcData || ohlcData.length < period) {
-        console.warn("Linear Regression: Not enough data or chart not available.");
-        return;
-    }
-
-    // Get the last 'period' data points
-    const recentData = ohlcData.slice(-period);
-
-    // For simplicity, let's use the closing prices for regression
-    // And map time to a simple index (0, 1, 2, ...) for calculation
-    const yValues = recentData.map(d => d.close);
-    const xValues = recentData.map((_, i) => i);
-
-    // Calculate linear regression (slope 'm' and intercept 'b' for y = mx + b)
-    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-    const n = xValues.length;
-
-    for (let i = 0; i < n; i++) {
-        sumX += xValues[i];
-        sumY += yValues[i];
-        sumXY += xValues[i] * yValues[i];
-        sumXX += xValues[i] * xValues[i];
-    }
-
-    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-    const intercept = (sumY - slope * sumX) / n;
-
-    // Determine the start and end points for the line on the chart
-    // The line will span from the first candle of the 'recentData' to the last one.
-    const regressionLineData = [
-        { time: recentData[0].time, value: slope * xValues[0] + intercept }, // Start point
-        { time: recentData[n - 1].time, value: slope * xValues[n - 1] + intercept } // End point
-    ];
-
-    // Remove previous regression line if it exists
-    if (window.regressionLineSeries) {
-        try { chart.removeSeries(window.regressionLineSeries); } catch (e) { /* ignore */ }
-    }
-
-    // Add the new line series for the regression line
-    window.regressionLineSeries = chart.addLineSeries({
-        color: color,
-        lineWidth: lineWidth,
-        lastValueVisible: false, // Optional: hide the price label on the price scale
-        priceLineVisible: false, // Optional: hide the price line that follows the last value
-    });
-    window.regressionLineSeries.setData(regressionLineData);
-}
-
-/**
- * Initializes the Lightweight Chart with IST localization for time scale.
- * @param {string} containerId - The ID of the HTML element to contain the chart.
- * @returns {object} The chart instance.
+ * Initializes a Lightweight Chart with IST-localized time scale.
+ * @param {string} containerId - The ID of the container element for the chart.
+ * @returns {object|null} The created chart instance, or null on failure.
  */
 function initChart(containerId) {
-    const chartContainer = document.getElementById(containerId);
-    if (!chartContainer) {
-        console.error(`Chart container with ID '${containerId}' not found.`);
-        return null;
-    }
-    chartContainer.innerHTML = ''; 
+  const container = document.getElementById(containerId);
+  if (!container) {
+    console.error(`Chart container with ID '${containerId}' not found.`);
+    return null;
+  }
+  container.innerHTML = '';
 
-    const chart = LightweightCharts.createChart(chartContainer, {
-        width: chartContainer.clientWidth,
-        height: chartContainer.clientHeight || 500, 
-        layout: { backgroundColor: '#111827', textColor: '#d1d5db' },
-        grid: { vertLines: { color: '#374151' }, horzLines: { color: '#374151' } },
-        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-        priceScale: { borderColor: '#4b5563', autoScale: true },
-        timeScale: {
-            borderColor: '#4b5563',
-            timeVisible: true,
-            secondsVisible: false, // Keep false unless you have second-level data and need it
-            // rightOffset: 12, // Optional: space at the right end of the chart
-        },
+  // Base colors
+  const BACKGROUND_COLOR = '#111827';  // dark gray
+  const TEXT_COLOR       = '#d1d5db';  // light gray
+  const GRID_COLOR       = '#374151';  // slightly lighter gray
+  const SCALE_BORDER     = '#4b5563';  // border color for axes
+
+  // Create the chart
+  const chart = LightweightCharts.createChart(container, {
+    width:  container.clientWidth,
+    height: container.clientHeight || 500,
+    layout: {
+      backgroundColor: BACKGROUND_COLOR,
+      textColor:       TEXT_COLOR,
+    },
+    grid: {
+      vertLines: { color: GRID_COLOR },
+      horzLines: { color: GRID_COLOR },
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+    },
+    priceScale: {
+      borderColor: SCALE_BORDER,
+      autoScale:   true,
+    },
+    timeScale: {
+      borderColor: SCALE_BORDER,
+      timeVisible: true,
+      secondsVisible: false,
+    },
+  });
+
+  // IST time formatter (HH:mm, 24-hour)
+  const istTimeFormatter = (ts) => {
+    const d = new Date(ts * 1000);
+    return d.toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
     });
+  };
 
-    // Define IST time formatter for the time scale
-    const istTimeFormatter = (timestampInSeconds) => {
-        const date = new Date(timestampInSeconds * 1000); // LWCharts provides UTC seconds
-        // Customize format as needed. Example: "HH:mm" for intraday, or date for daily
-        // This example shows HH:mm for time component
-        return date.toLocaleTimeString('en-IN', {
-            timeZone: 'Asia/Kolkata', // Specify Indian Standard Time
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: false // Use true for AM/PM format if preferred
+  // IST tick mark formatter (handles Year, Month, Day, Time, TimeWithSeconds)
+  const istTickMarkFormatter = (ts, tickType) => {
+    const d = new Date(ts * 1000);
+    switch (tickType) {
+      case LightweightCharts.TickMarkType.Year:
+        return d.toLocaleDateString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          year: 'numeric',
         });
-        // For a more complete date/time string, you could use:
-        // return date.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    };
-    
-    // Define a tick mark formatter that shows date for day ticks and time for intraday ticks
-    const istTickMarkFormatter = (timestampInSeconds, tickType, locale) => {
-        const date = new Date(timestampInSeconds * 1000);
-        switch (tickType) {
-            case LightweightCharts.TickMarkType.Year:
-                return date.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric' });
-            case LightweightCharts.TickMarkType.Month:
-                return date.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', year: 'numeric' });
-            case LightweightCharts.TickMarkType.DayOfMonth:
-                 return date.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' });
-            case LightweightCharts.TickMarkType.Time: // Intraday ticks
-                return date.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
-            case LightweightCharts.TickMarkType.TimeWithSeconds: // If secondsVisible is true
-                return date.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-            default: // Fallback, should not happen with known tick types
-                return String(timestampInSeconds);
-        }
-    };
+      case LightweightCharts.TickMarkType.Month:
+        return d.toLocaleDateString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          month: 'short',
+          year: 'numeric',
+        });
+      case LightweightCharts.TickMarkType.DayOfMonth:
+        return d.toLocaleDateString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          day: '2-digit',
+          month: 'short',
+        });
+      case LightweightCharts.TickMarkType.Time:
+        return d.toLocaleTimeString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      case LightweightCharts.TickMarkType.TimeWithSeconds:
+        return d.toLocaleTimeString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+      default:
+        return String(ts);
+    }
+  };
 
+  chart.applyOptions({
+    timeScale: {
+      localization:      { timeFormatter: istTimeFormatter },
+      tickMarkFormatter: istTickMarkFormatter,
+    },
+  });
 
-    // Apply localization to the time scale
-    chart.applyOptions({
-        timeScale: {
-            localization: {
-                // locale: 'en-IN', // You can set locale for date formatting (e.g., "dd/mm/yyyy" vs "mm/dd/yyyy")
-                timeFormatter: istTimeFormatter, // Formats the time displayed on the crosshair and last bar info.
-            },
-             tickMarkFormatter: istTickMarkFormatter, // Formats the labels on the time scale axis.
-        },
-    });
+  // Expose the background color so the regression‐channel code can “know” it if needed.
+  window.chartOptions = {
+    layout: { backgroundColor: BACKGROUND_COLOR },
+  };
 
-    return chart;
+  return chart;
 }
 
-function addOrUpdateCandlestickSeries(chart, ohlcData) { // ohlcData.time is UTC epoch seconds
-    if (!chart) return null;
-    if (window.candlestickSeries) {
-        try { chart.removeSeries(window.candlestickSeries); } catch (e) { /* Warn or ignore */ }
-    }
-    window.candlestickSeries = chart.addCandlestickSeries({
-        upColor: '#22c55e', downColor: '#ef4444',
-        borderDownColor: '#ef4444', borderUpColor: '#22c55e',
-        wickDownColor: '#ef4444', wickUpColor: '#22c55e',
-    });
-    window.candlestickSeries.setData(ohlcData);
 
-    // --- REPLACE OLD REGRESSION CALL WITH THIS ---
-    if (ohlcData && ohlcData.length > 0) {
-        addLinearRegressionChannel(chart, ohlcData, 10, 'close'); // Using 10 periods, close price
-                                                                // You can adjust multipliers and colors here or pass them as args
-    }
-    // --- END OF MODIFIED SECTION ---
+/**
+ * Adds or updates a Candlestick series on the chart, then redraws
+ * the Linear Regression Channel beneath it.
+ *
+ * @param {object} chart    - The Lightweight Chart instance.
+ * @param {Array<{time:number, open:number, high:number, low:number, close:number}>} ohlcData
+ *        - An array of candle objects, with `time` in UTC epoch seconds.
+ * @returns {object|null} The candlestick series instance, or null on failure.
+ */
+function addOrUpdateCandlestickSeries(chart, ohlcData) {
+  if (!chart) return null;
 
-    return window.candlestickSeries;
+  // If a previous candlestick series exists, remove it.
+  if (window.candlestickSeries) {
+    try {
+      chart.removeSeries(window.candlestickSeries);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // Create a new candlestick series with green/red coloring
+  const candlestickSeries = chart.addCandlestickSeries({
+    upColor:      '#22c55e',
+    downColor:    '#ef4444',
+    borderUpColor:   '#22c55e',
+    borderDownColor: '#ef4444',
+    wickUpColor:  '#22c55e',
+    wickDownColor:'#ef4444',
+  });
+  candlestickSeries.setData(ohlcData);
+  window.candlestickSeries = candlestickSeries;
+
+  // Recompute & redraw the regression channel on every update
+  addOrUpdateLinearRegressionChannel(chart, ohlcData);
+  return candlestickSeries;
 }
+
+// Keep track of all series that belong to the regression‐channel
+if (!window.chartSeries) window.chartSeries = {};
+window.chartSeries.linearRegression = [];
+
+
+/**
+ * Removes any existing series that were used for the Linear Regression Channel.
+ * @param {object} chart - The Lightweight Chart instance.
+ */
+function removeLinearRegressionChannel(chart) {
+  if (!window.chartSeries.linearRegression) return;
+  window.chartSeries.linearRegression.forEach(series => {
+    try {
+      chart.removeSeries(series);
+    } catch (e) {
+      // ignore
+    }
+  });
+  window.chartSeries.linearRegression = [];
+}
+
+
+/**
+ * Adds or updates a Linear Regression Channel.  The “fill” between upper & lower
+ * regression lines will be a light‐blue band of 15% opacity.  Below the lower line
+ * there will be no opaque fill—so the chart’s own dark gray background and grid
+ * will show through.
+ *
+ * Internally, we do this with two overlapping AreaSeries:
+ *   1) upperFill:   a 15%‐blue area “from upperLine down to bottom”,
+ *   2) lowerCutoff: a fully‐transparent area “from lowerLine down to bottom”,
+ *                  which effectively “erases” the portion of upperFill below lowerLine.
+ *
+ * Then we draw the boundary lines on top.
+ *
+ * @param {object} chart - The Lightweight Chart instance.
+ * @param {Array<{time:number, open:number, high:number, low:number, close:number}>} ohlcData
+ *        - The full OHLC array.  We’ll take the last N bars (N=10) for regression.
+ */
+function addOrUpdateLinearRegressionChannel(chart, ohlcData) {
+  // Remove any existing regression‐channel series (in case a previous middle line exists)
+  removeLinearRegressionChannel(chart);
+
+  const REGRESSION_LENGTH = 10;
+  if (!ohlcData || ohlcData.length < REGRESSION_LENGTH) {
+    // Not enough bars to calculate a 10-bar regression.
+    return;
+  }
+
+  // Take the last N candles
+  const windowData = ohlcData.slice(-REGRESSION_LENGTH);
+  const L = windowData.length;
+  const times  = windowData.map(d => d.time);
+  const closes = windowData.map(d => d.close);
+
+  // Compute slope & intercept of linear regression on the close prices
+  const xVals  = Array.from({ length: L }, (_, i) => i);
+  const sumX   = xVals.reduce((s, v) => s + v, 0);
+  const sumY   = closes.reduce((s, v) => s + v, 0);
+  const sumXY  = xVals.reduce((s, v, i) => s + v * closes[i], 0);
+  const sumXX  = xVals.reduce((s, v) => s + v * v, 0);
+  const slope  = (L * sumXY - sumX * sumY) / (L * sumXX - sumX * sumX);
+  const intercept = (sumY - slope * sumX) / L;
+
+  // Build the “middle” regression‐line Y values
+  const middleYs = xVals.map(x => slope * x + intercept);
+  const midStart = middleYs[0];
+  const midEnd   = middleYs[L - 1];
+  const middleLine = [
+    { time: times[0],   value: midStart },
+    { time: times[L - 1], value: midEnd   },
+  ];
+
+  // Color for the middle line
+  const MIDDLE_LINE_COLOR = 'rgb(213, 37, 219)'; // you can change this as needed
+
+  // Common options for the line series (no last‐value dot or price line)
+  const commonOpts = {
+    lastValueVisible: false,
+    priceLineVisible: false,
+  };
+
+  //
+  // === ONLY STEP: Draw the middle regression line on top ===
+  //
+  const middleLineSeries = chart.addLineSeries({
+    ...commonOpts,
+    color:     MIDDLE_LINE_COLOR,
+    lineWidth: 2,
+  });
+  middleLineSeries.setData(middleLine);
+
+  // Keep track of this series so removeLinearRegressionChannel can clear it later
+  window.chartSeries.linearRegression.push(middleLineSeries);
+}
+/**
+ * Adds or updates indicator lines (e.g., RSI, MACD) on top of the chart.
+ * @param {object} chart - The Lightweight Chart instance.
+ * @param {object} indicatorData - A map from indicator name ➔ Array of {time, value}.
+ * @param {object} [indicatorColors={}] - Optional map { indicatorName: hexColor }.
+ */
+function addOrUpdateIndicatorSeries(chart, indicatorData, indicatorColors = {}) {
+  if (!chart || !indicatorData) return;
+
+  // Remove any old indicator series
+  if (!window.indicatorSeries) window.indicatorSeries = {};
+  Object.values(window.indicatorSeries).forEach(s => {
+    try { chart.removeSeries(s); } catch(e) { /*ignore*/ }
+  });
+  window.indicatorSeries = {};
+
+  // Add each new indicator
+  Object.keys(indicatorData).forEach(key => {
+    const data = indicatorData[key];
+    if (Array.isArray(data) && data.length > 0) {
+      const series = chart.addLineSeries({
+        color:            indicatorColors[key] || getRandomColor(),
+        lineWidth:        2,
+        lastValueVisible: false,
+        priceLineVisible: true,
+      });
+      series.setData(data);
+      window.indicatorSeries[key] = series;
+    }
+  });
+}
+
+
+/**
+ * Places trade markers (e.g. buy/sell arrows) on the candlestick series.
+ * @param {object} candlestickSeriesInstance - The series returned from addCandlestickSeries().
+ * @param {Array<{time:number, position:"aboveBar"|"belowBar", color:string, shape:string, text?:string}>} tradeMarkersData
+ */
+function addTradeMarkers(candlestickSeriesInstance, tradeMarkersData) {
+  if (!candlestickSeriesInstance || !Array.isArray(tradeMarkersData) || tradeMarkersData.length === 0) {
+    return;
+  }
+  const markers = tradeMarkersData.map(m => ({
+    time:     m.time,
+    position: m.position,
+    color:    m.color,
+    shape:    m.shape,
+    text:     m.text || '',
+  }));
+  candlestickSeriesInstance.setMarkers(markers);
+}
+
+
+/**
+ * Clears everything from the chart: regression channel, candles, and indicators.
+ * @param {object} chart - The Lightweight Chart instance.
+ */
 function clearChart(chart) {
-    if (!chart) return;
-    if (window.candlestickSeries) {
-        try { chart.removeSeries(window.candlestickSeries); } catch (e) { /* ignore */ }
-        window.candlestickSeries = null;
-    }
-    if (window.indicatorSeries) {
-        for (const key in window.indicatorSeries) {
-            try { chart.removeSeries(window.indicatorSeries[key]); } catch (e) { /* ignore */ }
-        }
-        window.indicatorSeries = {};
-    }
-    // --- ADD/MODIFY THIS ---
-    if (window.regressionChannelGroup) {
-        window.regressionChannelGroup.forEach(series => {
-            try { chart.removeSeries(series); } catch (e) { /* ignore */ }
-        });
-        window.regressionChannelGroup = []; // Reset the array
-    }
-    if (window.regressionLineSeries) { // If you still have the old single line series reference
-        try { chart.removeSeries(window.regressionLineSeries); } catch(e) { /*ignore*/ }
-        window.regressionLineSeries = null;
-    }
-    // --- END OF ADDED/MODIFIED CODE ---
-}
-function addOrUpdateIndicatorSeries(chart, indicatorData, indicatorColors = {}) { // indicatorData values are {time: UTC_epoch_seconds, value: ...}
-    if (!chart || !indicatorData) return;
-    if (window.indicatorSeries) {
-        for (const seriesName in window.indicatorSeries) {
-            if (window.indicatorSeries[seriesName]) {
-                try { chart.removeSeries(window.indicatorSeries[seriesName]); } catch (e) { /* Warn or ignore */ }
-            }
-        }
-    }
+  if (!chart) return;
+
+  // Remove regression channel series
+  removeLinearRegressionChannel(chart);
+
+  // Remove the candlestick series
+  if (window.candlestickSeries) {
+    try { chart.removeSeries(window.candlestickSeries); } catch(e) {}
+    window.candlestickSeries = null;
+  }
+
+  // Remove any indicator series
+  if (window.indicatorSeries) {
+    Object.values(window.indicatorSeries).forEach(s => {
+      try { chart.removeSeries(s); } catch(e) {}
+    });
     window.indicatorSeries = {};
-    Object.keys(indicatorData).forEach(key => {
-        const data = indicatorData[key];
-        if (data && data.length > 0) {
-            const series = chart.addLineSeries({
-                color: indicatorColors[key] || getRandomColor(),
-                lineWidth: 2,
-            });
-            series.setData(data); // Timestamps are UTC epoch seconds
-            window.indicatorSeries[key] = series;
-        }
-    });
+  }
 }
 
-function addTradeMarkers(candlestickSeriesInstance, tradeMarkersData) { // tradeMarkersData.time is UTC epoch seconds
-    if (!candlestickSeriesInstance || !tradeMarkersData || tradeMarkersData.length === 0) return;
-    const markers = tradeMarkersData.map(marker => ({
-        time: marker.time, // UTC epoch seconds
-        position: marker.position, color: marker.color, shape: marker.shape, text: marker.text || ''
-    }));
-    candlestickSeriesInstance.setMarkers(markers);
-}
 
-function clearChart(chart) {
-    if (!chart) return;
-    if (window.candlestickSeries) {
-        try { chart.removeSeries(window.candlestickSeries); } catch (e) { /* ignore */ }
-        window.candlestickSeries = null;
-    }
-    if (window.indicatorSeries) {
-        for (const key in window.indicatorSeries) {
-            try { chart.removeSeries(window.indicatorSeries[key]); } catch (e) { /* ignore */ }
-        }
-        window.indicatorSeries = {};
-    }
-}
-
+/**
+ * Tells the chart to auto‐zoom so all visible data fits.
+ * @param {object} chart - The Lightweight Chart instance.
+ */
 function fitChartContent(chart) {
-    if (chart) chart.timeScale().fitContent();
+  if (chart) chart.timeScale().fitContent();
 }
 
+
+/**
+ * Returns a random hex color string (e.g. "#A1B2C3").
+ * Useful for assigning default indicator colors.
+ * @returns {string}
+ */
 function getRandomColor() {
-    const letters = '0123456789ABCDEF';
-    let color = '#';
-    for (let i = 0; i < 6; i++) color += letters[Math.floor(Math.random() * 16)];
-    return color;
+  const letters = '0123456789ABCDEF';
+  let color = '#';
+  for (let i = 0; i < 6; i++) {
+    color += letters[Math.floor(Math.random() * 16)];
+  }
+  return color;
 }
 
+
+/**
+ * Resizes the chart to match its container’s current dimensions.
+ * @param {object} chart       - The Lightweight Chart instance.
+ * @param {string} containerId - The ID of the container element.
+ */
 function resizeChart(chart, containerId) {
-    const chartContainer = document.getElementById(containerId);
-    if (chart && chartContainer) {
-        chart.resize(chartContainer.clientWidth, chartContainer.clientHeight || 500);
-    }
+  const container = document.getElementById(containerId);
+  if (chart && container) {
+    chart.resize(container.clientWidth, container.clientHeight || 500);
+  }
 }
 
-// --- Functions for Equity/Drawdown Charts ---
+
+/**
+ * Creates a simple stand‐alone line chart—for example, to plot “equity” or “drawdown.”
+ * @param {string} containerId - The ID of the container element.
+ * @param {string} lineColor   - The hex color for the line (default "#2962FF").
+ * @returns {{ chart: object|null, series: object|null }}
+ */
 function initSimpleLineChart(containerId, lineColor = '#2962FF') {
-    const container = document.getElementById(containerId);
-    if (!container) {
-        console.error(`Container ${containerId} not found for simple line chart.`);
-        return { chart: null, series: null };
+  const container = document.getElementById(containerId);
+  if (!container) {
+    console.error(`Container '${containerId}' not found for simple line chart.`);
+    return { chart: null, series: null };
+  }
+  container.innerHTML = '';
+
+  const BACKGROUND_COLOR = '#1f2937'; // slightly different dark gray
+  const TEXT_COLOR       = '#d1d5db';
+  const GRID_COLOR       = '#374151';
+  const SCALE_BORDER     = '#4b5563';
+
+  const chart = LightweightCharts.createChart(container, {
+    width:  container.clientWidth,
+    height: container.clientHeight || 300,
+    layout: {
+      backgroundColor: BACKGROUND_COLOR,
+      textColor:       TEXT_COLOR,
+    },
+    grid: {
+      vertLines: { color: GRID_COLOR },
+      horzLines: { color: GRID_COLOR },
+    },
+    priceScale: {
+      borderColor: SCALE_BORDER,
+    },
+    timeScale: {
+      borderColor: SCALE_BORDER,
+      timeVisible: true,
+      secondsVisible: false,
+    },
+  });
+
+  // Re‐use IST time & tick formatting
+  const istTimeFormatter = (ts) => {
+    const d = new Date(ts * 1000);
+    return d.toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+  const istTickMarkFormatter = (ts, tickType) => {
+    const d = new Date(ts * 1000);
+    if (
+      tickType === LightweightCharts.TickMarkType.DayOfMonth ||
+      tickType === LightweightCharts.TickMarkType.Time
+    ) {
+      return (
+        d.toLocaleDateString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          day: '2-digit',
+          month: 'short',
+        }) +
+        ' ' +
+        d.toLocaleTimeString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      );
     }
-    container.innerHTML = '';
-
-    const chart = LightweightCharts.createChart(container, {
-        width: container.clientWidth, height: container.clientHeight || 300,
-        layout: { backgroundColor: '#1f2937', textColor: '#d1d5db' },
-        grid: { vertLines: { color: '#374151' }, horzLines: { color: '#374151' } },
-        timeScale: { borderColor: '#4b5563', timeVisible: true, secondsVisible: false },
-        priceScale: { borderColor: '#4b5563' }
+    return d.toLocaleDateString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      month: 'short',
+      year: 'numeric',
     });
+  };
 
-    // Apply IST localization to equity/drawdown charts as well
-    const istTimeFormatter = (timestampInSeconds) => { /* ... same as in initChart ... */ 
-        const date = new Date(timestampInSeconds * 1000);
-        return date.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
-    };
-     const istTickMarkFormatter = (timestampInSeconds, tickType, locale) => { /* ... same as in initChart ... */
-        const date = new Date(timestampInSeconds * 1000);
-        // Simplified for equity curve (often daily or by trade time)
-        if (tickType === LightweightCharts.TickMarkType.DayOfMonth || tickType === LightweightCharts.TickMarkType.Time ) {
-             return date.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' }) + " " +
-                    date.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false});
-        }
-        return date.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', year: 'numeric' });
-    };
+  chart.applyOptions({
+    timeScale: {
+      localization:      { timeFormatter: istTimeFormatter },
+      tickMarkFormatter: istTickMarkFormatter,
+    },
+  });
 
+  const series = chart.addLineSeries({
+    color:            lineColor,
+    lineWidth:        2,
+    lastValueVisible: false,
+    priceLineVisible: true,
+  });
 
-    chart.applyOptions({
-        timeScale: {
-            localization: { timeFormatter: istTimeFormatter },
-            tickMarkFormatter: istTickMarkFormatter
-        }
-    });
-
-    const series = chart.addLineSeries({ color: lineColor, lineWidth: 2 });
-    return { chart, series };
+  return { chart, series };
 }
 
-function setSimpleLineChartData(series, data) { // data elements are {time: UTC_epoch_seconds, value: ...} or {timestamp: "ISO_UTC_string", ...}
-    if (series && data) {
-        const formattedData = data.map(d => {
-            let timestamp; // Should be UTC epoch seconds
-            if (typeof d.time === 'number') { // Backend sends UTC epoch seconds directly
-                timestamp = d.time;
-            } else if (typeof d.timestamp === 'number') { // Alternative key from backend
-                 timestamp = d.timestamp;
-            } else if (typeof d.timestamp === 'string') { // Backend might send ISO string (e.g. from Pydantic datetime)
-                const dateObj = new Date(d.timestamp); // new Date() on ISO string with Z or offset is UTC
-                if (!isNaN(dateObj.getTime())) {
-                    timestamp = Math.floor(dateObj.getTime() / 1000);
-                } else {
-                    console.warn("setSimpleLineChartData: Could not parse timestamp string:", d.timestamp);
-                    return null; // Skip this data point
-                }
-            } else {
-                 console.warn("setSimpleLineChartData: Invalid time/timestamp format:", d);
-                 return null; // Skip
-            }
-            // Ensure ms are converted to s if necessary for timestamps
-            if (timestamp > 2000000000000) timestamp = Math.floor(timestamp / 1000);
 
-            const valueKey = d.equity !== undefined ? 'equity' : (d.drawdown !== undefined ? 'drawdown' : 'value');
-            return { time: timestamp, value: d[valueKey] };
-        }).filter(d => d !== null && d.time !== undefined && d.value !== undefined); // Filter out nulls or malformed
-        
-        if(formattedData.length > 0) {
-            series.setData(formattedData);
+/**
+ * Populates a simple line chart (from initSimpleLineChart) with raw data.
+ * Accepts objects containing either:
+ *    • .time  (number of UTC seconds),
+ *    • .timestamp (number or ISO‐string),
+ *    • and one of .value / .equity / .drawdown.
+ *
+ * @param {object} series - The line series returned by initSimpleLineChart().
+ * @param {Array<object>} data - Array of raw data points.
+ */
+function setSimpleLineChartData(series, data) {
+  if (!series || !Array.isArray(data)) return;
+
+  const formatted = data
+    .map(d => {
+      let ts;
+      if (typeof d.time === 'number') {
+        ts = d.time;
+      } else if (typeof d.timestamp === 'number') {
+        ts = d.timestamp;
+      } else if (typeof d.timestamp === 'string') {
+        const dd = new Date(d.timestamp);
+        if (!isNaN(dd.getTime())) {
+          ts = Math.floor(dd.getTime() / 1000);
         } else {
-            series.setData([]); // Clear if no valid data
-            console.warn("setSimpleLineChartData: No valid data points after formatting.");
+          console.warn('Invalid timestamp string:', d.timestamp);
+          return null;
         }
-    }
+      } else {
+        console.warn('Invalid data object (no time/timestamp):', d);
+        return null;
+      }
+      // If a millisecond‐based timestamp was given, convert to seconds
+      if (ts > 2e12) {
+        ts = Math.floor(ts / 1000);
+      }
+      // Prefer .equity, then .drawdown, then .value
+      const val =
+        d.equity !== undefined
+          ? d.equity
+          : d.drawdown !== undefined
+            ? d.drawdown
+            : d.value;
+      if (val === undefined) {
+        console.warn('No value/equity/drawdown in data point:', d);
+        return null;
+      }
+      return { time: ts, value: val };
+    })
+    .filter(pt => pt !== null && pt.time !== undefined && pt.value !== undefined);
+
+  if (formatted.length > 0) {
+    series.setData(formatted);
+  } else {
+    series.setData([]);
+    console.warn('setSimpleLineChartData: no valid points after formatting.');
+  }
 }
