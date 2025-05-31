@@ -11,7 +11,7 @@ function initChart(containerId) {
     console.error(`Chart container with ID '${containerId}' not found.`);
     return null;
   }
-  container.innerHTML = '';
+  container.innerHTML = ''; // Clear previous content
 
   // Base colors
   const BACKGROUND_COLOR = '#111827';  // dark gray
@@ -44,6 +44,9 @@ function initChart(containerId) {
       secondsVisible: false,
     },
   });
+
+  // Store containerId on chart instance for later use (e.g., by table)
+  chart.containerId = containerId;
 
   // IST time formatter (HH:mm, 24-hour)
   const istTimeFormatter = (ts) => {
@@ -115,11 +118,11 @@ function initChart(containerId) {
 
 /**
  * Adds or updates a Candlestick series on the chart, then redraws
- * the Linear Regression Channel beneath it.
+ * the Linear Regression Channels and their info table beneath it.
  *
  * @param {object} chart    - The Lightweight Chart instance.
  * @param {Array<{time:number, open:number, high:number, low:number, close:number}>} ohlcData
- *        - An array of candle objects, with `time` in UTC epoch seconds.
+ * - An array of candle objects, with `time` in UTC epoch seconds.
  * @returns {object|null} The candlestick series instance, or null on failure.
  */
 function addOrUpdateCandlestickSeries(chart, ohlcData) {
@@ -146,8 +149,8 @@ function addOrUpdateCandlestickSeries(chart, ohlcData) {
   candlestickSeries.setData(ohlcData);
   window.candlestickSeries = candlestickSeries;
 
-  // Recompute & redraw the regression channel on every update
-  addOrUpdateLinearRegressionChannel(chart, ohlcData);
+  // Recompute & redraw the regression channels and info table on every update
+  addOrUpdateMultipleLinearRegressionChannels(chart, ohlcData, chart.containerId);
   return candlestickSeries;
 }
 
@@ -161,7 +164,7 @@ window.chartSeries.linearRegression = [];
  * @param {object} chart - The Lightweight Chart instance.
  */
 function removeLinearRegressionChannel(chart) {
-  if (!window.chartSeries.linearRegression) return;
+  if (!window.chartSeries || !window.chartSeries.linearRegression) return;
   window.chartSeries.linearRegression.forEach(series => {
     try {
       chart.removeSeries(series);
@@ -172,80 +175,209 @@ function removeLinearRegressionChannel(chart) {
   window.chartSeries.linearRegression = [];
 }
 
+/**
+ * Calculates Pearson's R correlation coefficient.
+ * @param {number[]} xVals - Array of x values.
+ * @param {number[]} yVals - Array of y values.
+ * @returns {number} Pearson's R.
+ */
+function calculatePearsonR(xVals, yVals) {
+  const n = xVals.length;
+  if (n === 0 || yVals.length !== n) return 0;
+
+  const sumX = xVals.reduce((s, v) => s + v, 0);
+  const sumY = yVals.reduce((s, v) => s + v, 0);
+  const sumXY = xVals.reduce((s, v, i) => s + v * yVals[i], 0);
+  const sumXSquare = xVals.reduce((s, v) => s + v * v, 0);
+  const sumYSquare = yVals.reduce((s, v) => s + v * v, 0);
+
+  const numerator = n * sumXY - sumX * sumY;
+  const denominatorSqrtPart1 = n * sumXSquare - sumX * sumX;
+  const denominatorSqrtPart2 = n * sumYSquare - sumY * sumY;
+
+  if (denominatorSqrtPart1 <= 0 || denominatorSqrtPart2 <= 0) {
+    return 0; // Handles cases where all x or y values are constant
+  }
+  const denominator = Math.sqrt(denominatorSqrtPart1 * denominatorSqrtPart2);
+
+  if (denominator === 0) return 0;
+  return numerator / denominator;
+}
+
 
 /**
- * Adds or updates a Linear Regression Channel.  The “fill” between upper & lower
- * regression lines will be a light‐blue band of 15% opacity.  Below the lower line
- * there will be no opaque fill—so the chart’s own dark gray background and grid
- * will show through.
- *
- * Internally, we do this with two overlapping AreaSeries:
- *   1) upperFill:   a 15%‐blue area “from upperLine down to bottom”,
- *   2) lowerCutoff: a fully‐transparent area “from lowerLine down to bottom”,
- *                  which effectively “erases” the portion of upperFill below lowerLine.
- *
- * Then we draw the boundary lines on top.
- *
+ * Clears the regression information table from the DOM.
+ */
+function clearRegressionTable() {
+  const oldTable = document.getElementById('regressionInfoTable');
+  if (oldTable) oldTable.remove();
+}
+
+/**
+ * Displays a table with information about the regression lines on the chart.
+ * @param {Array<object>} tableData - Data for the table rows.
+ * @param {string} chartContainerId - The ID of the chart's container element.
+ */
+function displayRegressionTable(tableData, chartContainerId) {
+  const chartContainer = document.getElementById(chartContainerId);
+  if (!chartContainer) return;
+
+  clearRegressionTable(); // Remove old table if exists
+
+  const table = document.createElement('table');
+  table.id = 'regressionInfoTable';
+  table.style.position = 'absolute';
+  table.style.top = '10px';
+  table.style.right = '10px';
+  table.style.backgroundColor = 'rgba(30, 41, 59, 0.85)'; // Dark slate, semi-transparent
+  table.style.color = '#e5e7eb'; // Lighter gray text
+  table.style.borderCollapse = 'collapse';
+  table.style.fontSize = '10px';
+  table.style.fontFamily = 'Arial, sans-serif';
+  table.style.zIndex = '1000'; // Ensure it's on top
+  table.style.border = '1px solid #4b5563'; // Border for the table itself
+  table.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
+
+
+  const thead = table.createTHead();
+  const headerRow = thead.insertRow();
+  const headers = ['Lookback', 'Color', 'Slope', 'Pearson R'];
+  headers.forEach(text => {
+    const th = document.createElement('th');
+    th.textContent = text;
+    th.style.border = '1px solid #4b5563'; // Grid lines color
+    th.style.padding = '3px 5px';
+    th.style.backgroundColor = 'rgba(55, 65, 81, 0.9)'; // Slightly darker header
+    th.style.textAlign = 'center';
+    headerRow.appendChild(th);
+  });
+
+  const tbody = table.createTBody();
+  tableData.forEach(data => {
+    const row = tbody.insertRow();
+    const cellValues = [
+      data.lookback,
+      data.color,
+      data.slope.toFixed(5), // More precision for slope
+      data.pearsonR.toFixed(4)
+    ];
+
+    cellValues.forEach((val, index) => {
+      const cell = row.insertCell();
+      cell.style.border = '1px solid #4b5563';
+      cell.style.padding = '3px 5px';
+      if (index === 1) { // Color cell
+        const colorSwatch = document.createElement('div');
+        colorSwatch.style.width = '100%';
+        colorSwatch.style.height = '12px';
+        colorSwatch.style.backgroundColor = val;
+        cell.appendChild(colorSwatch);
+        cell.style.minWidth = '40px';
+      } else {
+        cell.textContent = val;
+      }
+      cell.style.textAlign = (index === 0 || index === 1) ? 'center' : 'right';
+    });
+  });
+  if (!chartContainer.style.position || chartContainer.style.position === 'static') {
+     chartContainer.style.position = 'relative'; // Ensure chart container can position absolute children
+  }
+  chartContainer.appendChild(table);
+}
+
+const LOOKBACK_PERIODS = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+const REGRESSION_LINE_COLORS = [
+  '#FF6347', '#4682B4', '#32CD32', '#FFD700', '#6A5ACD', // Tomato, SteelBlue, LimeGreen, Gold, SlateBlue
+  '#FF4500', '#1E90FF', '#ADFF2F', '#DAA520', '#BA55D3'  // OrangeRed, DodgerBlue, GreenYellow, GoldenRod, MediumOrchid
+];
+
+
+/**
+ * Adds or updates multiple Linear Regression Channels and their information table.
  * @param {object} chart - The Lightweight Chart instance.
  * @param {Array<{time:number, open:number, high:number, low:number, close:number}>} ohlcData
- *        - The full OHLC array.  We’ll take the last N bars (N=10) for regression.
+ * - The full OHLC array.
+ * @param {string} chartContainerId - The ID of the chart's container element.
  */
-function addOrUpdateLinearRegressionChannel(chart, ohlcData) {
-  // Remove any existing regression‐channel series (in case a previous middle line exists)
-  removeLinearRegressionChannel(chart);
+function addOrUpdateMultipleLinearRegressionChannels(chart, ohlcData, chartContainerId) {
+  removeLinearRegressionChannel(chart); // Clear previous lines
+  clearRegressionTable(); // Clear previous table
 
-  const REGRESSION_LENGTH = 10;
-  if (!ohlcData || ohlcData.length < REGRESSION_LENGTH) {
-    // Not enough bars to calculate a 10-bar regression.
-    return;
-  }
+  if (!ohlcData || ohlcData.length === 0) return;
 
-  // Take the last N candles
-  const windowData = ohlcData.slice(-REGRESSION_LENGTH);
-  const L = windowData.length;
-  const times  = windowData.map(d => d.time);
-  const closes = windowData.map(d => d.close);
+  const tableInfo = []; // To store data for the info table
 
-  // Compute slope & intercept of linear regression on the close prices
-  const xVals  = Array.from({ length: L }, (_, i) => i);
-  const sumX   = xVals.reduce((s, v) => s + v, 0);
-  const sumY   = closes.reduce((s, v) => s + v, 0);
-  const sumXY  = xVals.reduce((s, v, i) => s + v * closes[i], 0);
-  const sumXX  = xVals.reduce((s, v) => s + v * v, 0);
-  const slope  = (L * sumXY - sumX * sumY) / (L * sumXX - sumX * sumX);
-  const intercept = (sumY - slope * sumX) / L;
-
-  // Build the “middle” regression‐line Y values
-  const middleYs = xVals.map(x => slope * x + intercept);
-  const midStart = middleYs[0];
-  const midEnd   = middleYs[L - 1];
-  const middleLine = [
-    { time: times[0],   value: midStart },
-    { time: times[L - 1], value: midEnd   },
-  ];
-
-  // Color for the middle line
-  const MIDDLE_LINE_COLOR = 'rgb(213, 37, 219)'; // you can change this as needed
-
-  // Common options for the line series (no last‐value dot or price line)
   const commonOpts = {
     lastValueVisible: false,
     priceLineVisible: false,
+    lineWidth: 1.5, // Slightly thinner lines for multiple lines
   };
 
-  //
-  // === ONLY STEP: Draw the middle regression line on top ===
-  //
-  const middleLineSeries = chart.addLineSeries({
-    ...commonOpts,
-    color:     MIDDLE_LINE_COLOR,
-    lineWidth: 2,
-  });
-  middleLineSeries.setData(middleLine);
+  for (let i = 0; i < LOOKBACK_PERIODS.length; i++) {
+    const REGRESSION_LENGTH = LOOKBACK_PERIODS[i];
+    const LINE_COLOR = REGRESSION_LINE_COLORS[i % REGRESSION_LINE_COLORS.length]; // Use modulo for safety
 
-  // Keep track of this series so removeLinearRegressionChannel can clear it later
-  window.chartSeries.linearRegression.push(middleLineSeries);
+    if (ohlcData.length < REGRESSION_LENGTH) {
+      // console.warn(`Not enough bars (${ohlcData.length}) for regression length ${REGRESSION_LENGTH}.`);
+      continue;
+    }
+
+    const windowData = ohlcData.slice(-REGRESSION_LENGTH);
+    const L = windowData.length;
+    const times  = windowData.map(d => d.time);
+    const closes = windowData.map(d => d.close);
+
+    const xVals  = Array.from({ length: L }, (_, k) => k);
+    const sumX   = xVals.reduce((s, v) => s + v, 0);
+    const sumY   = closes.reduce((s, v) => s + v, 0);
+    const sumXY  = xVals.reduce((s, v, k) => s + v * closes[k], 0);
+    const sumXX  = xVals.reduce((s, v) => s + v * v, 0);
+
+    let slope = 0;
+    let intercept = L > 0 ? sumY / L : 0; // Default to average if slope cannot be calculated
+
+    if (L * sumXX - sumX * sumX !== 0) { // Avoid division by zero
+        slope = (L * sumXY - sumX * sumY) / (L * sumXX - sumX * sumX);
+        intercept = (sumY - slope * sumX) / L;
+    }
+
+
+    const middleYs = xVals.map(x => slope * x + intercept);
+    const midStart = middleYs[0];
+    const midEnd   = middleYs[L - 1];
+
+    // Ensure there are at least two points to draw a line
+    if (times.length >= 2 && middleYs.length >=2 && times[0] !== undefined && times[L-1] !== undefined && midStart !== undefined && midEnd !== undefined ) {
+        const middleLineData = [
+            { time: times[0],   value: midStart },
+            { time: times[L - 1], value: midEnd   },
+        ];
+
+        const middleLineSeries = chart.addLineSeries({
+            ...commonOpts,
+            color: LINE_COLOR,
+        });
+        middleLineSeries.setData(middleLineData);
+        window.chartSeries.linearRegression.push(middleLineSeries);
+
+        const pearsonR = calculatePearsonR(xVals, closes);
+        tableInfo.push({
+            lookback: REGRESSION_LENGTH,
+            color: LINE_COLOR,
+            slope: slope,
+            pearsonR: pearsonR
+        });
+    } else {
+        // console.warn(`Could not generate regression line for lookback ${REGRESSION_LENGTH} due to insufficient distinct time points or data.`);
+    }
+  }
+
+  if (tableInfo.length > 0 && chartContainerId) {
+    displayRegressionTable(tableInfo, chartContainerId);
+  }
 }
+
+
 /**
  * Adds or updates indicator lines (e.g., RSI, MACD) on top of the chart.
  * @param {object} chart - The Lightweight Chart instance.
@@ -270,7 +402,7 @@ function addOrUpdateIndicatorSeries(chart, indicatorData, indicatorColors = {}) 
         color:            indicatorColors[key] || getRandomColor(),
         lineWidth:        2,
         lastValueVisible: false,
-        priceLineVisible: true,
+        priceLineVisible: true, // Keeps price line for indicators
       });
       series.setData(data);
       window.indicatorSeries[key] = series;
@@ -300,7 +432,7 @@ function addTradeMarkers(candlestickSeriesInstance, tradeMarkersData) {
 
 
 /**
- * Clears everything from the chart: regression channel, candles, and indicators.
+ * Clears everything from the chart: regression channel, candles, indicators, and info table.
  * @param {object} chart - The Lightweight Chart instance.
  */
 function clearChart(chart) {
@@ -308,17 +440,20 @@ function clearChart(chart) {
 
   // Remove regression channel series
   removeLinearRegressionChannel(chart);
+  // Clear the regression info table
+  clearRegressionTable();
+
 
   // Remove the candlestick series
   if (window.candlestickSeries) {
-    try { chart.removeSeries(window.candlestickSeries); } catch(e) {}
+    try { chart.removeSeries(window.candlestickSeries); } catch(e) {/*ignore*/}
     window.candlestickSeries = null;
   }
 
   // Remove any indicator series
   if (window.indicatorSeries) {
     Object.values(window.indicatorSeries).forEach(s => {
-      try { chart.removeSeries(s); } catch(e) {}
+      try { chart.removeSeries(s); } catch(e) {/*ignore*/}
     });
     window.indicatorSeries = {};
   }
@@ -357,7 +492,11 @@ function getRandomColor() {
 function resizeChart(chart, containerId) {
   const container = document.getElementById(containerId);
   if (chart && container) {
-    chart.resize(container.clientWidth, container.clientHeight || 500);
+    const newWidth = container.clientWidth;
+    const newHeight = container.clientHeight || 500; // Keep fallback height
+    if (newWidth > 0 && newHeight > 0) {
+        chart.resize(newWidth, newHeight);
+    }
   }
 }
 
@@ -461,9 +600,9 @@ function initSimpleLineChart(containerId, lineColor = '#2962FF') {
 /**
  * Populates a simple line chart (from initSimpleLineChart) with raw data.
  * Accepts objects containing either:
- *    • .time  (number of UTC seconds),
- *    • .timestamp (number or ISO‐string),
- *    • and one of .value / .equity / .drawdown.
+ * • .time  (number of UTC seconds),
+ * • .timestamp (number or ISO‐string),
+ * • and one of .value / .equity / .drawdown.
  *
  * @param {object} series - The line series returned by initSimpleLineChart().
  * @param {Array<object>} data - Array of raw data points.
@@ -491,7 +630,7 @@ function setSimpleLineChartData(series, data) {
         return null;
       }
       // If a millisecond‐based timestamp was given, convert to seconds
-      if (ts > 2e12) {
+      if (ts > 2e12) { // A rough check for milliseconds (e.g., > year 2033 in seconds)
         ts = Math.floor(ts / 1000);
       }
       // Prefer .equity, then .drawdown, then .value
@@ -512,7 +651,7 @@ function setSimpleLineChartData(series, data) {
   if (formatted.length > 0) {
     series.setData(formatted);
   } else {
-    series.setData([]);
-    console.warn('setSimpleLineChartData: no valid points after formatting.');
+    series.setData([]); // Clear series if no valid data
+    // console.warn('setSimpleLineChartData: no valid points after formatting.');
   }
 }
