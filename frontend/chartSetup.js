@@ -36,10 +36,10 @@ function addLinearRegressionChannel(
     upperMultiplier = 2.0, // Matches default from PineScript example
     lowerMultiplier = 2.0, // Matches default from PineScript example
     upperFillColor = 'rgba(0, 120, 255, 0.15)', // Blueish, semi-transparent
-    lowerFillColor = 'rgba(0, 120, 255, 0.15)',   // Reddish, semi-transparent
+    lowerFillColor = 'rgba(255, 0, 0, 0.15)',   // Reddish, semi-transparent
     centralLineColor = '#FFA500', // Orange
     upperLineColor = '#42A5F5',   // Lighter Blue
-    lowerLineColor = '#EF5350',   // Lighter Red
+    lowerLineColor = '#42A5F5',   // Lighter Red
     lineWidth = 1
 ) {
     if (!chart || !ohlcData || ohlcData.length < period) {
