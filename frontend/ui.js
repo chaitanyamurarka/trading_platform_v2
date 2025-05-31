@@ -1,4 +1,4 @@
-// ui.js
+// frontend/ui.js
 
 /**
  * Populates a select dropdown with options.
@@ -22,7 +22,7 @@ function populateSelect(selectElement, options, valueField, textField, defaultVa
         const option = document.createElement('option');
         option.value = optionData[valueField];
         option.textContent = optionData[textField];
-        if (defaultValue && option.value === defaultValue) {
+        if (defaultValue && String(option.value) === String(defaultValue)) { // Ensure type consistency for comparison
             option.selected = true;
         }
         selectElement.appendChild(option);
@@ -38,14 +38,25 @@ function populateSelect(selectElement, options, valueField, textField, defaultVa
  */
 function createStrategyParamsInputs(container, paramsConfig, currentValues = {}, isRangeInputs = false) {
     if (!container) {
-        console.error("Strategy parameters container not found.");
+        console.error("[ui.js:createStrategyParamsInputs] Strategy parameters container not found.");
         return;
     }
     container.innerHTML = ''; // Clear existing params
 
+    if (!paramsConfig || !Array.isArray(paramsConfig)) {
+        console.error("[ui.js:createStrategyParamsInputs] paramsConfig is invalid or not an array.");
+        container.innerHTML = '<p class="text-red-500">Error: Invalid parameter configuration.</p>';
+        return;
+    }
+
     paramsConfig.forEach(param => {
+        if (!param || typeof param.name === 'undefined' || typeof param.type === 'undefined') {
+            console.warn("[ui.js:createStrategyParamsInputs] Skipping invalid parameter object:", param);
+            return; // Skip this malformed parameter
+        }
+
         const paramDiv = document.createElement('div');
-        paramDiv.className = 'mb-3'; // Add some margin
+        paramDiv.className = 'mb-3';
 
         const label = document.createElement('label');
         label.htmlFor = `param-${param.name}${isRangeInputs ? '-min' : ''}`;
@@ -67,19 +78,22 @@ function createStrategyParamsInputs(container, paramsConfig, currentValues = {},
                 input.placeholder = suffix.charAt(0).toUpperCase() + suffix.slice(1);
 
                 if (param.type === 'float' || (param.type === 'integer' && suffix ==='step')) {
-                    input.step = (param.type === 'float' && suffix !== 'step') ? '0.01' : (param.step || '0.1'); // Smaller step for floats
+                    input.step = (param.step !== undefined ? param.step : (param.type === 'float' ? '0.01' : '0.1'));
                 } else if (param.type === 'integer') {
-                     input.step = param.step || '1';
+                     input.step = param.step !== undefined ? param.step : '1';
                 }
 
 
                 if (currentValues[param.name] && currentValues[param.name][suffix] !== undefined) {
                     input.value = currentValues[param.name][suffix];
                 } else {
-                    // Use defaults from strategy info if available for min/max, or sensible placeholders
                     if (suffix === 'min' && param.min_value !== null && param.min_value !== undefined) input.value = param.min_value;
-                    if (suffix === 'max' && param.max_value !== null && param.max_value !== undefined) input.value = param.max_value;
-                    if (suffix === 'step' && param.step !== null && param.step !== undefined) input.value = param.step;
+                    else if (suffix === 'max' && param.max_value !== null && param.max_value !== undefined) input.value = param.max_value;
+                    else if (suffix === 'step' && param.step !== null && param.step !== undefined) input.value = param.step;
+                    // Provide a very basic default if specific range defaults are not present
+                    else if (suffix === 'min') input.value = param.type === 'integer' ? '1' : '0.1';
+                    else if (suffix === 'max') input.value = param.type === 'integer' ? '100' : '10';
+                    else if (suffix === 'step') input.value = param.type === 'integer' ? '1' : '0.1';
                 }
                 rangeGrid.appendChild(input);
             });
@@ -88,26 +102,28 @@ function createStrategyParamsInputs(container, paramsConfig, currentValues = {},
         } else {
             // For dashboard/backtest: Single value input
             const input = document.createElement('input');
-            input.type = param.type === 'boolean' ? 'checkbox' : (param.type === 'integer' || param.type === 'float' ? 'number' : 'text');
-            input.id = `param-${param.name}`;
+            input.id = `param-${param.name}`; // Ensure this ID is unique and correct
             input.name = param.name;
-            input.className = 'input-field w-full';
-
-            if (param.type === 'float') {
-                input.step = param.step || '0.01';
-            } else if (param.type === 'integer') {
-                input.step = param.step || '1';
-            }
 
             if (param.type === 'boolean') {
+                input.type = 'checkbox';
                 input.className = 'form-checkbox h-5 w-5 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500';
-                input.checked = currentValues[param.name] !== undefined ? Boolean(currentValues[param.name]) : Boolean(param.default_value);
+                // Use param.default for boolean, ensuring correct type coercion
+                input.checked = currentValues[param.name] !== undefined ? Boolean(currentValues[param.name]) : (param.default !== undefined ? Boolean(param.default) : false);
             } else {
-                input.value = currentValues[param.name] !== undefined ? currentValues[param.name] : param.default_value;
-            }
-            if(param.min_value !== null && param.min_value !== undefined) input.min = param.min_value;
-            if(param.max_value !== null && param.max_value !== undefined) input.max = param.max_value;
+                input.type = (param.type === 'integer' || param.type === 'float') ? 'number' : 'text';
+                input.className = 'input-field w-full';
+                // Use param.default for other types
+                input.value = currentValues[param.name] !== undefined ? currentValues[param.name] : (param.default !== undefined ? param.default : '');
 
+                if (param.type === 'float') {
+                    input.step = param.step !== undefined ? param.step : '0.01';
+                } else if (param.type === 'integer') {
+                    input.step = param.step !== undefined ? param.step : '1';
+                }
+                if(param.min_value !== null && param.min_value !== undefined) input.min = param.min_value;
+                if(param.max_value !== null && param.max_value !== undefined) input.max = param.max_value;
+            }
             paramDiv.appendChild(input);
         }
         container.appendChild(paramDiv);
@@ -122,53 +138,115 @@ function createStrategyParamsInputs(container, paramsConfig, currentValues = {},
  */
 function getStrategyParamsValues(paramsConfig, isRangeInputs = false) {
     const values = {};
+    if (!paramsConfig || !Array.isArray(paramsConfig)) {
+        console.error("[ui.js:getStrategyParamsValues] paramsConfig is invalid.");
+        return values;
+    }
+
     paramsConfig.forEach(param => {
-    // Inside getStrategyParamsValues function, in the isRangeInputs block:
-    if (isRangeInputs) {
-        const minEl = document.getElementById(`param-${param.name}-min`);
-        const maxEl = document.getElementById(`param-${param.name}-max`);
-        const stepEl = document.getElementById(`param-${param.name}-step`);
-
-        let minVal, maxVal, stepVal;
-
-        if (param.type === 'integer' || param.type === 'int') {
-            minVal = parseInt(minEl.value);
-            maxVal = parseInt(maxEl.value);
-            stepVal = parseInt(stepEl.value);
-        } else if (param.type === 'float') {
-            minVal = parseFloat(minEl.value);
-            maxVal = parseFloat(maxEl.value);
-            stepVal = parseFloat(stepEl.value);
-        } else { // Default to string if not clearly numeric, though this shouldn't happen for range inputs
-            minVal = minEl.value;
-            maxVal = maxEl.value;
-            stepVal = stepEl.value;
+        if (!param || typeof param.name === 'undefined' || typeof param.type === 'undefined') {
+            console.warn("[ui.js:getStrategyParamsValues] Skipping invalid parameter object in config:", param);
+            return;
         }
+        if (isRangeInputs) {
+            const minEl = document.getElementById(`param-${param.name}-min`);
+            const maxEl = document.getElementById(`param-${param.name}-max`);
+            const stepEl = document.getElementById(`param-${param.name}-step`);
 
-        // Check for NaN and provide a default or throw error if appropriate
-        // For now, assuming values will be valid numbers or NaN if empty/invalid
-        values[param.name] = {
-            min: minVal,
-            max: maxVal,
-            step: stepVal,
-        };
- // ... rest of the function
+            if (!minEl || !maxEl || !stepEl) {
+                console.warn(`[ui.js:getStrategyParamsValues] Range input elements not found for param: ${param.name}`);
+                values[param.name] = { min: undefined, max: undefined, step: undefined }; // Indicate missing inputs
+                return;
+            }
+
+            let minVal, maxVal, stepVal;
+
+            if (param.type === 'integer' || param.type === 'int') {
+                minVal = minEl.value !== '' ? parseInt(minEl.value) : undefined;
+                maxVal = maxEl.value !== '' ? parseInt(maxEl.value) : undefined;
+                stepVal = stepEl.value !== '' ? parseInt(stepEl.value) : undefined;
+            } else if (param.type === 'float') {
+                minVal = minEl.value !== '' ? parseFloat(minEl.value) : undefined;
+                maxVal = maxEl.value !== '' ? parseFloat(maxEl.value) : undefined;
+                stepVal = stepEl.value !== '' ? parseFloat(stepEl.value) : undefined;
+            } else {
+                minVal = minEl.value;
+                maxVal = maxEl.value;
+                stepVal = stepEl.value;
+            }
+            values[param.name] = { min: minVal, max: maxVal, step: stepVal };
         } else {
             const inputEl = document.getElementById(`param-${param.name}`);
             if (inputEl) {
                 if (param.type === 'boolean') {
                     values[param.name] = inputEl.checked;
                 } else if (param.type === 'integer') {
-                    values[param.name] = parseInt(inputEl.value);
+                    values[param.name] = inputEl.value !== '' ? parseInt(inputEl.value) : undefined; // Return undefined if empty to distinguish from 0
                 } else if (param.type === 'float') {
-                    values[param.name] = parseFloat(inputEl.value);
+                    values[param.name] = inputEl.value !== '' ? parseFloat(inputEl.value) : undefined;
                 } else {
                     values[param.name] = inputEl.value;
                 }
+            } else {
+                // This warning will now show if an input field is missing
+                console.warn(`[ui.js:getStrategyParamsValues] Input element not found for param: param-${param.name}`);
+                values[param.name] = undefined; // Indicate missing input
             }
         }
     });
+    console.log("[ui.js:getStrategyParamsValues] Collected values:", JSON.parse(JSON.stringify(values)));
     return values;
+}
+
+// ... (rest of ui.js: displayPerformanceSummary, populateTradesTable, etc.)
+// Make sure to keep the other functions from your ui.js file if they are not shown here.
+// The provided snippet only included up to getStrategyParamsValues.
+// The following are stubs for other functions if they are not fully in the snippet.
+
+function displayPerformanceSummary(container, metrics) {
+    if (!container) return;
+    // ... (implementation)
+    // console.log("[ui.js] displayPerformanceSummary called with metrics:", metrics);
+}
+
+function populateTradesTable(tbodyElement, trades) {
+    if (!tbodyElement) return;
+    // ... (implementation)
+    // console.log("[ui.js] populateTradesTable called with trades:", trades ? trades.length : 0);
+}
+
+function populateOptimizationResultsTable(tbodyElement, theadElement, results, paramKeys, metricKeys) {
+    if (!tbodyElement || !theadElement) return;
+    // ... (implementation)
+}
+
+function formatDateForAPI(dateInput) {
+    if (!dateInput) return null;
+    const date = new Date(dateInput);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function setDefaultDateInputs(startDateInput, endDateInput, defaultDaysAgo = 90) {
+    if (endDateInput) {
+        endDateInput.value = formatDateForAPI(new Date());
+    }
+    if (startDateInput) {
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - defaultDaysAgo);
+        startDateInput.value = formatDateForAPI(startDate);
+    }
+}
+
+function updateOptimizationProgressUI(statusData) {
+    // ... (implementation)
+}
+
+function displayBestOptimizationResult(container, bestResult, metricOptimized) {
+    if (!container) return;
+    // ... (implementation)
 }
 
 /**

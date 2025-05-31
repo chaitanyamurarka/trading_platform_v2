@@ -448,14 +448,19 @@
                 return;
             }
             currentPage = pageName;
-            mainContent.innerHTML = pageTemplates[pageName];
+            mainContent.innerHTML = pageTemplates[pageName]; // HTML is injected here
             setActiveNav(pageName);
 
-            // Call page-specific initialization function
-            if (typeof window[`init${pageName.charAt(0).toUpperCase() + pageName.slice(1)}Page`] === 'function') {
-                window[`init${pageName.charAt(0).toUpperCase() + pageName.slice(1)}Page`]();
+            const initFunctionName = `init${pageName.charAt(0).toUpperCase() + pageName.slice(1)}Page`;
+
+            // MODIFICATION: Use setTimeout to ensure DOM is ready for the init function
+            if (typeof window[initFunctionName] === 'function') {
+                setTimeout(() => {
+                    console.log(`Calling ${initFunctionName} after a brief delay.`);
+                    window[initFunctionName]();
+                }, 0); // A delay of 0ms is usually enough to push it to the next event cycle
             } else {
-                console.warn(`Initialization function for ${pageName} not found.`);
+                console.warn(`Initialization function ${initFunctionName} for ${pageName} not found.`);
             }
         }
 
@@ -467,7 +472,6 @@
         document.addEventListener('DOMContentLoaded', () => {
             loadPage('dashboard'); // Load dashboard by default
         });
-
         // Placeholder for page-specific JS to be added later
         // e.g., initDashboardPage(), initBacktestingPage(), initOptimizationPage()
         // These will be in dashboard.js, backtesting.js, optimization.js
@@ -476,8 +480,9 @@
     <script src="/frontend/api.js" defer></script>
     <script src="/frontend/ui.js" defer></script>
     <script src="/frontend/chartSetup.js" defer></script>
-    <script src="/frontend/dashboard.js" defer></script>
+   
     <script src="/frontend/backtesting.js" defer></script>
     <script src="/frontend/optimization.js" defer></script>
+    <script src="/frontend/dashboard.js" defer></script>
     </body>
 </html>
